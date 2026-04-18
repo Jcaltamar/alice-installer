@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 )
 
 // GPUInfo holds the result of GPU detection.
@@ -34,20 +33,6 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
 }
 
-// osCommandRunner is the production CommandRunner backed by os/exec.
-type osCommandRunner struct{}
-
-func (o *osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	var stdoutBuf, stderrBuf []byte
-	out, err := cmd.Output()
-	stdoutBuf = out
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		stderrBuf = exitErr.Stderr
-	}
-	return stdoutBuf, stderrBuf, err
-}
-
 // dockerInfoResponse is the subset of `docker info --format '{{json .}}'` we care about.
 type dockerInfoResponse struct {
 	Runtimes map[string]json.RawMessage `json:"Runtimes"`
@@ -62,7 +47,7 @@ type DockerGPUDetector struct {
 // Pass nil to use the production os/exec runner.
 func NewDockerGPUDetector(runner CommandRunner) *DockerGPUDetector {
 	if runner == nil {
-		runner = &osCommandRunner{}
+		runner = &OSCommandRunner{}
 	}
 	return &DockerGPUDetector{runner: runner}
 }

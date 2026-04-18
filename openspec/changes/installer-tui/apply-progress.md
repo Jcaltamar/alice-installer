@@ -1,9 +1,9 @@
 # Apply Progress: installer-tui
 
-**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042)
+**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042), 3 (T-022..T-034 — parallel Phase 3 + Phase 4)
 **Mode**: Strict TDD
 **Date last updated**: 2026-04-18
-**Status**: 23/84 tasks complete
+**Status**: 36/84 tasks complete
 
 ---
 
@@ -144,9 +144,51 @@
 
 ---
 
+### Batch 3 — Phase 3 (Docker + Compose wrappers) + Phase 4 (Env generation) — run IN PARALLEL
+
+- [x] T-022 — `internal/docker/client.go` — `DockerClient` interface + `Runtimes`, `Info`, `Version` types
+- [x] T-023 — `CLIDocker` prod impl (Probe/Info/Version/HasRuntime) via `platform.CommandRunner`
+- [x] T-024 — `internal/docker/fake.go` — `FakeDockerClient` with all fields
+- [x] T-025 — `internal/compose/runner.go` — `ComposeRunner` interface + `Version`, `ServiceHealth`, `PullProgressMsg`, `UpProgressMsg` types
+- [x] T-026 — `CLICompose` prod impl (Version/Pull/Up/Down/HealthStatus) using `CommandRunner` + `StreamingCommandRunner`, plus `FakeComposeRunner`
+- [x] T-027 — `internal/compose/overlay.go` — `ComposeFiles(gpuDetected, baseline, overlay)` pure fn
+- [x] T-028 — `internal/compose/overlay_test.go` — 4 table-driven cases
+- [x] T-029 — `internal/platform/command.go` — exported `OSCommandRunner`, `StreamingCommandRunner` interface, `OSStreamingCommandRunner`, `FakeCommandRunner`, `FakeStreamingCommandRunner`
+- [x] T-030 — `internal/secrets/password.go` + `fake.go` — `PasswordGenerator` interface, `CryptoRandGenerator` (crypto/rand + base64), `FakeGenerator`
+- [x] T-031 — `internal/envgen/env.go` — `Templater`, `Input`, `PortsConfig` (14 ports), workspace validation, arch-specific image substitution, password resolution, line-by-line template rendering
+- [x] T-032 — `internal/envgen/env_test.go` — 14 workspace validation cases + arch sub + password (3 cases) + preservation + 14 port sub + idempotency + trailing newline (38 assertions)
+- [x] T-033 — `internal/envgen/writer.go` — `FileWriter` interface, `AtomicWriter` (tmp+rename, 0600), `FakeWriter`
+- [x] T-034 — `internal/envgen/writer_test.go` — 6 AtomicWriter + 2 FakeWriter cases
+
+### Batch 3 — Files Created
+| Package | File |
+|---------|------|
+| `internal/platform` | `command.go`, `command_test.go` |
+| `internal/platform` | `gpu.go` (modified: use exported `OSCommandRunner`, drop `os/exec`) |
+| `internal/docker` | `client.go`, `client_test.go`, `fake.go` |
+| `internal/compose` | `runner.go`, `runner_test.go`, `fake.go`, `overlay.go`, `overlay_test.go` |
+| `internal/secrets` | `password.go`, `password_test.go`, `fake.go` |
+| `internal/envgen` | `env.go`, `env_test.go`, `writer.go`, `writer_test.go`, `testdata/env.example.txt` |
+
+### Batch 3 — Test Summary
+- **Phase 3 tests**: 41 (5 platform command + 14 docker + 18 compose runner + 4 overlay)
+- **Phase 4 tests**: 38 (7 password + 23 envgen + 8 writer)
+- **Cumulative tests**: ~125 across 8 packages
+- **`go test -short ./...`**: PASS (8 packages, 0 failures) after orchestrator `go mod tidy`
+- **Parallel execution**: Phase 3 + Phase 4 agents ran concurrently without file conflict; orchestrator merged results post-hoc.
+
+### Batch 3 — Deviations
+- **StreamingCommandRunner kept separate** (not merged into `CommandRunner`) — cleaner DI; `CLICompose.Pull/Up` need Stream only, others need Run only.
+- **Unicode workspace validation**: spec says SHOULD warn (non-blocking); batch instructions said reject for fs safety. Chose strict error return in `envgen.Render`; TUI layer can implement warn-and-proceed later.
+- **ArchUnknown fallback**: `imageTags` produces plain (no-suffix) tags for unknown arch (same as amd64). Safe default.
+- **T-035/T-036**: Not explicitly scoped in batch — Phase 4 fakes were folded into T-030 and T-033 files. Phase 4 functionally complete.
+- **`docker version --format '{{json .}}'`** returns nested `Server.Components[0].Version` not a flat `Server.Version`.
+
+---
+
 ## Remaining Tasks
 
-T-022..T-040 (Phases 3-5: Docker/Compose wrappers, Env Generation, Preflight — 19 tasks)
+T-035..T-040 (Phase 5: Preflight coordinator — 4 tasks, T-035/T-036 already absorbed)
 T-043..T-084 (Phases 7-11: TUI states, cmd wiring, integration, distribution, security — 42 tasks)
 
-**61 tasks remaining**. Next batch recommended: T-022..T-029 (Docker & Compose Wrappers).
+**~48 tasks remaining**. Next batch: T-037..T-040 (Preflight orchestrator — depends on Phases 2 + 3).

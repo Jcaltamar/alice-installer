@@ -3,6 +3,7 @@ module github.com/jcaltamar/alice-installer
 go 1.23.0
 
 require (
+	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/golangci/golangci-lint v1.64.8
 	github.com/goreleaser/goreleaser v1.26.2
 	gopkg.in/yaml.v3 v3.0.1
@@ -128,7 +129,6 @@ require (
 	github.com/charithe/durationcheck v0.0.10 // indirect
 	github.com/charmbracelet/bubbletea v0.22.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
-	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.8.0 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/exp/ordered v0.0.0-20231010190216-1cb11efc897d // indirect

@@ -43,26 +43,26 @@
 
 ## Phase 3: Docker & Compose Wrappers
 
-- [ ] T-022 — **(RED)** `internal/docker/client_test.go`: mock `exec.Cmd` output; assert Version/ComposeVersion parse semver; Runtimes parses JSON; daemon-down → `ErrDaemonUnreachable` — *REQ-PF-3, REQ-PF-4*. **Done**: FAIL.
-- [ ] T-023 — **(GREEN)** `internal/docker/client.go`: `DockerClient` interface + `ShellDockerClient` (shells `docker info`, `docker version`, `docker compose version`) with context cancellation — *REQ-PF-3, REQ-PF-4*. **Done**: T-022 passes.
-- [ ] T-024 — **(FAKE)** `internal/docker/fake.go`: `FakeDockerClient` with configurable `VersionStr`, `ComposeVersionStr`, `Runtimes`, `InfoErr` fields.
-- [ ] T-025 — **(RED)** `internal/compose/runner_test.go`: table-driven; Pull returns per-service progress msgs; Up → success / exit-immediately / port-conflict; Down; WaitHealthy polls healthy/timeout; overlay -f flags — *REQ-CO-1..CO-5*. **Done**: FAIL.
-- [ ] T-026 — **(GREEN)** `internal/compose/runner.go`: `ComposeRunner` interface + `ShellComposeRunner` using `FakeDockerClient`-injected shell — *REQ-CO-1..CO-5*. **Done**: T-025 passes.
-- [ ] T-027 — **(RED)** `internal/compose/overlay_test.go`: GPU true → 2 `-f` flags; GPU false → 1; order must be base then gpu — *REQ-CO-1*. **Done**: FAIL.
-- [ ] T-028 — **(GREEN)** `internal/compose/overlay.go`: `SelectOverlays(gpu bool) []string` — *REQ-CO-1*. **Done**: T-027 passes.
-- [ ] T-029 — **(FAKE)** `internal/compose/fake.go`: `FakeComposeRunner` with injectable pull/up/down/health sequences.
+- [x] T-022 — **(RED)** `internal/docker/client_test.go`: mock `exec.Cmd` output; assert Version/ComposeVersion parse semver; Runtimes parses JSON; daemon-down → `ErrDaemonUnreachable` — *REQ-PF-3, REQ-PF-4*. **Done**: FAIL.
+- [x] T-023 — **(GREEN)** `internal/docker/client.go`: `DockerClient` interface + `ShellDockerClient` (shells `docker info`, `docker version`, `docker compose version`) with context cancellation — *REQ-PF-3, REQ-PF-4*. **Done**: T-022 passes.
+- [x] T-024 — **(FAKE)** `internal/docker/fake.go`: `FakeDockerClient` with configurable `VersionStr`, `ComposeVersionStr`, `Runtimes`, `InfoErr` fields.
+- [x] T-025 — **(RED)** `internal/compose/runner_test.go`: table-driven; Pull returns per-service progress msgs; Up → success / exit-immediately / port-conflict; Down; WaitHealthy polls healthy/timeout; overlay -f flags — *REQ-CO-1..CO-5*. **Done**: FAIL.
+- [x] T-026 — **(GREEN)** `internal/compose/runner.go`: `ComposeRunner` interface + `ShellComposeRunner` using `FakeDockerClient`-injected shell — *REQ-CO-1..CO-5*. **Done**: T-025 passes.
+- [x] T-027 — **(RED)** `internal/compose/overlay_test.go`: GPU true → 2 `-f` flags; GPU false → 1; order must be base then gpu — *REQ-CO-1*. **Done**: FAIL.
+- [x] T-028 — **(GREEN)** `internal/compose/overlay.go`: `SelectOverlays(gpu bool) []string` — *REQ-CO-1*. **Done**: T-027 passes.
+- [x] T-029 — **(FAKE)** `internal/compose/fake.go`: `FakeComposeRunner` with injectable pull/up/down/health sequences.
 
 ---
 
 ## Phase 4: Env Generation
 
-- [ ] T-030 — **(RED)** `internal/envgen/templater_test.go`: WORKSPACE validation (empty/slash/dot/whitespace/unicode-warn); arch tag substitution (amd64 vs arm64); default preservation; idempotency prompt; .env.example missing error; password NOT hardcoded — *REQ-ENV-1..REQ-ENV-6*. **Done**: FAIL.
-- [ ] T-031 — **(GREEN)** `internal/envgen/templater.go`: `EnvTemplater` + `Render(EnvInput) (string, error)` with all validation rules, arch-switch table from design, template parsing — *REQ-ENV-1..REQ-ENV-3, REQ-ENV-5*. **Done**: T-030 passes.
-- [ ] T-032 — **(RED)** `internal/secrets/gen_test.go`: `Generate()` returns 32-byte base64; two calls differ; no whitespace; only alphanumeric+base64 safe chars — *REQ-ENV-6*. **Done**: FAIL.
-- [ ] T-033 — **(GREEN)** `internal/secrets/gen.go`: `PasswordGen` interface + `CryptoRandGen` using `crypto/rand` — *REQ-ENV-6*. **Done**: T-032 passes.
-- [ ] T-034 — **(RED)** `internal/envgen/writer_test.go`: write to `t.TempDir()`; assert 0600 perms; content matches; atomic (temp+rename); second write on existing file requires overwrite flag — *REQ-ENV-4, design security*. **Done**: FAIL.
-- [ ] T-035 — **(GREEN)** `internal/envgen/writer.go`: `FilesystemOps` interface + `OsFilesystem`; `WriteAtomic` writes temp file then `os.Rename` — *REQ-ENV-4, design security*. **Done**: T-034 passes.
-- [ ] T-036 — **(FAKE)** `internal/envgen/fake.go`: `FakeEnvTemplater` + `FakeFilesystemOps` (in-memory map).
+- [x] T-030 — **(RED)** `internal/envgen/templater_test.go`: WORKSPACE validation (empty/slash/dot/whitespace/unicode-warn); arch tag substitution (amd64 vs arm64); default preservation; idempotency prompt; .env.example missing error; password NOT hardcoded — *REQ-ENV-1..REQ-ENV-6*. **Done**: FAIL.
+- [x] T-031 — **(GREEN)** `internal/envgen/templater.go`: `EnvTemplater` + `Render(EnvInput) (string, error)` with all validation rules, arch-switch table from design, template parsing — *REQ-ENV-1..REQ-ENV-3, REQ-ENV-5*. **Done**: T-030 passes.
+- [x] T-032 — **(RED)** `internal/secrets/gen_test.go`: `Generate()` returns 32-byte base64; two calls differ; no whitespace; only alphanumeric+base64 safe chars — *REQ-ENV-6*. **Done**: FAIL.
+- [x] T-033 — **(GREEN)** `internal/secrets/gen.go`: `PasswordGen` interface + `CryptoRandGen` using `crypto/rand` — *REQ-ENV-6*. **Done**: T-032 passes.
+- [x] T-034 — **(RED)** `internal/envgen/writer_test.go`: write to `t.TempDir()`; assert 0600 perms; content matches; atomic (temp+rename); second write on existing file requires overwrite flag — *REQ-ENV-4, design security*. **Done**: FAIL.
+- [x] T-035 — **(GREEN)** `internal/envgen/writer.go`: `FilesystemOps` interface + `OsFilesystem`; `WriteAtomic` writes temp file then `os.Rename` — *REQ-ENV-4, design security*. **Done**: T-034 passes.
+- [x] T-036 — **(FAKE)** `internal/envgen/fake.go`: `FakeEnvTemplater` + `FakeFilesystemOps` (in-memory map).
 
 ---
 
