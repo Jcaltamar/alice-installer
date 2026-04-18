@@ -31,3 +31,11 @@ var EnvExample []byte
 //
 //go:embed LogoNight.png
 var LogoNight []byte
+
+// LogoAliceSecurity is the Alice Security brand mark rendered on the splash
+// screen via pixterm's half-block ANSI renderer. The embedded copy is a
+// 256x256-fit resample of the full-resolution source at the repo root;
+// regenerate with `go run ./scripts/prescale-logo`.
+//
+//go:embed logo_alice_security.png
+var LogoAliceSecurity []byte

@@ -13,12 +13,13 @@ func newTestSplash() SplashModel {
 	return SplashModel{theme: theme.Default()}
 }
 
-// TestSplashViewContainsAlice asserts the splash screen contains the "ALICE" branding.
-func TestSplashViewContainsAlice(t *testing.T) {
+// TestSplashViewContainsWordmark asserts the splash renders the ALICE GUARDIAN
+// wordmark as plain styled text.
+func TestSplashViewContainsWordmark(t *testing.T) {
 	s := newTestSplash()
 	view := s.View()
-	if !strings.Contains(view, "ALICE") {
-		t.Errorf("splash view should contain 'ALICE', got:\n%s", view)
+	if !strings.Contains(view, "ALICE GUARDIAN") {
+		t.Errorf("splash view should contain 'ALICE GUARDIAN', got:\n%s", view)
 	}
 }
 

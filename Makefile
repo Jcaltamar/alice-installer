@@ -1,4 +1,4 @@
-.PHONY: test test-short test-integration cover build build-all build-snapshot release-local lint fmt tidy
+.PHONY: test test-short test-integration cover build build-all build-snapshot release-local lint fmt tidy prescale-logo
 
 BINARY      := alice-installer
 BIN_DIR     := bin
@@ -69,3 +69,10 @@ fmt:
 
 tidy:
 	go mod tidy
+
+# ── Assets ───────────────────────────────────────────────────────────────────
+
+# prescale-logo resamples logo_alice_security.png (~1 MB at 12501x12500) down
+# to a 256x256 PNG embedded via //go:embed. Run whenever the source logo changes.
+prescale-logo:
+	go run ./scripts/prescale-logo
