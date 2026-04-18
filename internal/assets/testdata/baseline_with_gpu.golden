@@ -1,0 +1,241 @@
+name: assets
+services:
+  backend:
+    command:
+      - node
+      - bin/www
+    container_name: alice_backend
+    depends_on:
+      postgresql-master:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities:
+                - gpu
+              driver: nvidia
+              count: -1
+    environment:
+      APIFACE: http://127.0.0.1:18080
+      DEBUG: "false"
+      HOST_BACKEND: 127.0.0.1
+      HOST_MQTT: 127.0.0.1
+      HOST_MQTT_PWD: pass
+      HOST_MQTT_USER: user
+      HOST_POSTGRES: 127.0.0.1
+      HOST_REDIS: 127.0.0.1
+      HOST_RTSP: 127.0.0.1:8554
+      HOST_WEBSOCKET: 127.0.0.1
+      HOSTDOCKER: http://127.0.0.1
+      NODE_ENV: production
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+      PORTDOCKER: "2375"
+      POSTGRES_DATABASE: alice_guardian
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PASSWORD: test-password
+      POSTGRES_PORT: "5432"
+      POSTGRES_SSL: "false"
+      POSTGRES_SSL_REJECT_UNAUTHORIZED: "false"
+      POSTGRES_USER: postgres
+      TELEGRAM_API: http://127.0.0.1:9190
+      WORKSPACE: alice
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -s
+        - http://localhost:9090/
+      timeout: 10s
+      interval: 30s
+      retries: 5
+      start_period: 1m0s
+    image: jcaltamare/aliceguardian:backend
+    network_mode: host
+    restart: always
+    runtime: nvidia
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /opt/alice-media
+        target: /opt/alice-media
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /opt/alice-config
+        target: /opt/alice-config
+        bind:
+          create_host_path: true
+      - type: volume
+        source: alice-guardian
+        target: /opt/alice-guardian
+        volume: {}
+  postgresql-master:
+    command:
+      - postgres
+      - -p
+      - "5432"
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+    container_name: alice_postgresql-master
+    environment:
+      POSTGRES_DB: alice_guardian
+      POSTGRES_PASSWORD: test-password
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - -U
+        - postgres
+        - -p
+        - "5432"
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: timescale/timescaledb:latest-pg15
+    network_mode: host
+    restart: always
+    volumes:
+      - type: volume
+        source: postgresql_master_data1
+        target: /var/lib/postgresql/data
+        volume: {}
+  queue:
+    container_name: alice_queue
+    depends_on:
+      postgresql-master:
+        condition: service_healthy
+        required: true
+    environment:
+      HOST_BACKEND: 127.0.0.1
+      HOST_POSTGRES: 127.0.0.1
+      HOST_QUEUE: localhost
+      HOST_REDIS: 127.0.0.1
+      HOST_WEBSOCKET: 127.0.0.1
+      NODE_ENV: production
+      POSTGRES_DATABASE: alice_guardian
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PASSWORD: test-password
+      POSTGRES_PORT: "5432"
+      POSTGRES_SSL: "false"
+      POSTGRES_SSL_REJECT_UNAUTHORIZED: "false"
+      POSTGRES_USER: postgres
+      QUEUE_PORT: "3000"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:3000/
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 40s
+    image: jcaltamare/aliceguardian:queue
+    network_mode: host
+    restart: always
+    volumes:
+      - type: bind
+        source: /opt/alice-media
+        target: /opt/alice-media
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /opt/alice-config
+        target: /opt/alice-config
+        bind:
+          create_host_path: true
+      - type: volume
+        source: alice-guardian
+        target: /opt/alice-guardian
+        volume: {}
+  redis:
+    command:
+      - redis-server
+      - --port
+      - "6379"
+    container_name: alice_redis
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - -p
+        - "6379"
+        - ping
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: redis:7-alpine
+    network_mode: host
+    restart: always
+  rtsp:
+    container_name: alice_rtsp
+    environment:
+      MTX_WEBRTC: "yes"
+      MTX_WEBRTCADDITIONALHOSTS: 10.10.100.51
+      MTX_WEBRTCADDRESS: :8889
+      MTX_WEBRTCICEUDP: "yes"
+      MTX_WEBRTCICEUDPADDRESS: :8189
+    image: bluenviron/mediamtx:latest-ffmpeg
+    network_mode: host
+    restart: always
+    volumes:
+      - type: bind
+        source: /opt/alice-media
+        target: /opt/alice-media
+  web:
+    container_name: alice_web
+    depends_on:
+      websocket:
+        condition: service_started
+        required: true
+    environment:
+      VUE_APP_HOST_BACKEND: 127.0.0.1
+      VUE_APP_HOST_BACKEND_A: 127.0.0.1
+      VUE_APP_HOST_POSTGRES: 127.0.0.1
+      VUE_APP_HOST_REDIS: 127.0.0.1
+      VUE_APP_HOST_WEBSOCKET: 127.0.0.1
+      VUE_APP_HOST_WEBSOCKET_A: 127.0.0.1
+    image: jcaltamare/aliceguardian:web_ag
+    network_mode: host
+    restart: always
+    volumes:
+      - type: volume
+        source: alice-guardian
+        target: /opt/alice-media
+        volume: {}
+      - type: volume
+        source: alice-guardian
+        target: /opt/alice-guardian
+        volume: {}
+  websocket:
+    container_name: alice_websocket
+    environment:
+      API_TIMEOUT: "30000"
+      DEBUG: "false"
+      HOST_BACKEND: 127.0.0.1
+      HOST_POSTGRES: 127.0.0.1
+      HOST_REDIS: 127.0.0.1
+      HOST_WEBSOCKET: 127.0.0.1
+      NODE_ENV: production
+      WEBSOCKET_MAX_RETRIES: "10"
+      WEBSOCKET_RETRY_DELAY: "5000"
+    image: jcaltamare/aliceguardian:socket1
+    network_mode: host
+    restart: unless-stopped
+volumes:
+  alice-guardian:
+    name: assets_alice-guardian
+  postgresql_master_data1:
+    name: assets_postgresql_master_data1

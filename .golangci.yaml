@@ -1,0 +1,24 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - gofmt
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosimple
+    - revive
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+        disabled: false
+
+issues:
+  exclude-rules:
+    # Relax revive naming rules inside test files
+    - path: "_test\\.go$"
+      linters:
+        - revive

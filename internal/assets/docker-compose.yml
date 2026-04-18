@@ -1,0 +1,166 @@
+services:
+  postgresql-master:
+    image: timescale/timescaledb:latest-pg15
+    container_name: alice_postgresql-master
+    network_mode: "host"
+    command: ["postgres", "-p", "${POSTGRES_PORT}","-c", "shared_buffers=256MB",
+      "-c", "work_mem=4MB",
+      "-c", "maintenance_work_mem=64MB"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+    volumes:
+      - postgresql_master_data1:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-p", "${POSTGRES_PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: alice_backend
+    command: ["node", "bin/www"]
+    network_mode: "host"
+    environment:
+      - HOST_REDIS=${REDIS_HOST}
+      - HOST_POSTGRES=${POSTGRES_HOST}
+      - HOST_WEBSOCKET=${WEBSOCKET_HOST}
+      - HOST_BACKEND=${BACKEND_HOST}
+      - TELEGRAM_API=${TELEGRAM_API}
+      - HOST_MQTT=${HOST_MQTT}
+      - HOST_MQTT_USER=${HOST_MQTT_USER}
+      - HOST_MQTT_PWD=${HOST_MQTT_PWD}
+      - WORKSPACE=${WORKSPACE}
+      - APIFACE=${APIFACE}
+      - HOSTDOCKER=${HOSTDOCKER}
+      - PORTDOCKER=${PORTDOCKER}
+      - HOST_RTSP=${HOST_RTSP}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE}
+      - POSTGRES_SSL=${POSTGRES_SSL}
+      - POSTGRES_SSL_REJECT_UNAUTHORIZED=${POSTGRES_SSL_REJECT_UNAUTHORIZED}
+      - NODE_ENV=${NODE_ENV}
+      - DEBUG=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/alice-media:/opt/alice-media
+      - /opt/alice-config:/opt/alice-config
+      - alice-guardian:/opt/alice-guardian
+    depends_on:
+      postgresql-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:9090/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+
+  websocket:
+    image: ${WEBSOCKET_IMAGE}
+    container_name: alice_websocket
+    network_mode: "host"
+    environment:
+      - HOST_REDIS=${REDIS_HOST}
+      - HOST_POSTGRES=${POSTGRES_HOST}
+      - HOST_WEBSOCKET=${WEBSOCKET_HOST}
+      - HOST_BACKEND=${BACKEND_HOST}
+      - NODE_ENV=${NODE_ENV}
+      - DEBUG=false
+      - WEBSOCKET_RETRY_DELAY=5000
+      - WEBSOCKET_MAX_RETRIES=10
+      - API_TIMEOUT=30000
+    restart: unless-stopped
+
+  web:
+    image: ${WEB_IMAGE}
+    container_name: alice_web
+    network_mode: "host"
+    environment:
+      - VUE_APP_HOST_REDIS=${REDIS_HOST}
+      - VUE_APP_HOST_POSTGRES=${POSTGRES_HOST}
+      - VUE_APP_HOST_WEBSOCKET=${WEBSOCKET_HOST}
+      - VUE_APP_HOST_BACKEND=${BACKEND_HOST}
+      - VUE_APP_HOST_WEBSOCKET_A=${WEBSOCKET_HOST}
+      - VUE_APP_HOST_BACKEND_A=${BACKEND_HOST}
+    volumes:
+      - alice-guardian:/opt/alice-media
+      - alice-guardian:/opt/alice-guardian
+    depends_on:
+      - websocket
+    restart: always
+
+  rtsp:
+    image: 'bluenviron/mediamtx:latest-ffmpeg'
+    container_name: alice_rtsp
+    restart: always
+    network_mode: "host"
+    environment:
+      - MTX_WEBRTC=yes
+      - MTX_WEBRTCADDRESS=:8889
+      - MTX_WEBRTCICEUDP=yes
+      - MTX_WEBRTCICEUDPADDRESS=:8189
+      - MTX_WEBRTCADDITIONALHOSTS=10.10.100.51
+    volumes:
+      - type: bind
+        source: /opt/alice-media
+        target: /opt/alice-media
+
+  queue:
+    image: ${QUEUE_IMAGE}
+    container_name: alice_queue
+    network_mode: host
+    environment:
+      - HOST_REDIS=${REDIS_HOST}
+      - HOST_POSTGRES=${POSTGRES_HOST}
+      - HOST_WEBSOCKET=${WEBSOCKET_HOST}
+      - HOST_BACKEND=${BACKEND_HOST}
+      - HOST_QUEUE=localhost
+      # PostgreSQL connection variables
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE}
+      - POSTGRES_SSL=${POSTGRES_SSL}
+      - POSTGRES_SSL_REJECT_UNAUTHORIZED=${POSTGRES_SSL_REJECT_UNAUTHORIZED}
+      # Queue specific variables
+      - NODE_ENV=${NODE_ENV}
+      - QUEUE_PORT=${QUEUE_PORT}
+    volumes:
+      - /opt/alice-media:/opt/alice-media
+      - /opt/alice-config:/opt/alice-config
+      - alice-guardian:/opt/alice-guardian
+    depends_on:
+      postgresql-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: always
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: alice_redis
+    network_mode: host
+    command: ["redis-server", "--port", "${REDIS_PORT}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "${REDIS_PORT}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+volumes:
+  postgresql_master_data1:
+  alice-guardian:

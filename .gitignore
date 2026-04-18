@@ -1,0 +1,35 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go workspace
+go.work
+go.work.sum
+vendor/
+
+# Generated / local
+.env
+.env.local
+*.log
+
+# Orchestrator / agent state (local only)
+.atl/

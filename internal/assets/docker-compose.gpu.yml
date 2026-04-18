@@ -1,0 +1,16 @@
+# GPU overlay — applied via `docker compose -f docker-compose.yml -f docker-compose.gpu.yml`
+# when the NVIDIA Container Toolkit runtime is detected at install time.
+# REQ-CO-1 / design decision #926
+services:
+  backend:
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-all}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

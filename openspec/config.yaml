@@ -1,0 +1,76 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Go + Bubbletea TUI (installer for Docker Compose stack)
+  Target platforms: Linux amd64/arm64, Windows amd64
+  Architecture: CLI TUI installer — screens, steps, system detection, env templating
+  Testing: go test ./... (strict TDD — unit + integration per architecture)
+  Style: gofmt, go vet, golangci-lint (to be configured)
+
+strict_tdd: true
+
+testing:
+  strict_tdd: true
+  detected: "2026-04-18"
+
+  test_runner:
+    command: "go test ./..."
+    framework: go test (built-in)
+
+  layers:
+    unit:
+      available: true
+      tool: go test
+    integration:
+      available: true
+      tool: go test + VM/container per architecture (arm64 Linux, amd64 Linux, amd64 Windows)
+      notes: Integration tests run in clean VMs/containers for each target architecture
+    e2e:
+      available: true
+      tool: teatest (charmbracelet/bubbletea/teatest)
+
+  coverage:
+    available: true
+    command: "go test -cover ./..."
+
+  quality:
+    linter:
+      available: false
+      command: "golangci-lint run (to be configured)"
+    type_checker:
+      available: true
+      command: "go vet ./..."
+    formatter:
+      available: true
+      command: "gofmt -w ."
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected packages and cross-platform implications
+    - Note which target architectures are affected
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Specify target platform (Linux/Windows) when behaviour differs
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Address cross-platform concerns explicitly (path separators, OS detection)
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+    - Include test task for every implementation task (Strict TDD)
+  apply:
+    - Follow existing code patterns and conventions
+    - Load go-testing skill for all Go test work
+    - RED-GREEN-REFACTOR: write failing test first, then implementation
+    tdd: true
+    test_command: "go test ./..."
+  verify:
+    test_command: "go test ./..."
+    build_command: "go build ./..."
+    coverage_threshold: 80
+  archive:
+    - Warn before merging destructive deltas (large removals)
