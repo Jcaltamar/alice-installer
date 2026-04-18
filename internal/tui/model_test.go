@@ -165,3 +165,79 @@ func TestPortsConfirmedMsgTransitionsToEnvWrite(t *testing.T) {
 		t.Errorf("PortsConfirmedMsg → state = %v, want StateEnvWrite", m.state)
 	}
 }
+
+// TestEnvWrittenMsgTransitionsToPull verifies env-write → pull.
+func TestEnvWrittenMsgTransitionsToPull(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateEnvWrite
+	updated, _ := m.Update(EnvWrittenMsg{Path: "/tmp/.env"})
+	m = updated.(Model)
+	if m.state != StatePull {
+		t.Errorf("EnvWrittenMsg → state = %v, want StatePull", m.state)
+	}
+	if m.envPath != "/tmp/.env" {
+		t.Errorf("envPath = %q, want /tmp/.env", m.envPath)
+	}
+}
+
+// TestDeployStartedMsgTransitionsToDeploy verifies pull-done → deploy.
+func TestDeployStartedMsgTransitionsToDeploy(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StatePull
+	updated, _ := m.Update(DeployStartedMsg{})
+	m = updated.(Model)
+	if m.state != StateDeploy {
+		t.Errorf("DeployStartedMsg → state = %v, want StateDeploy", m.state)
+	}
+}
+
+// TestHealthTickMsgFromDeployTransitionsToVerify verifies deploy → verify on first HealthTickMsg.
+func TestHealthTickMsgFromDeployTransitionsToVerify(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateDeploy
+	updated, _ := m.Update(HealthTickMsg{})
+	m = updated.(Model)
+	if m.state != StateVerify {
+		t.Errorf("HealthTickMsg (from deploy) → state = %v, want StateVerify", m.state)
+	}
+}
+
+// TestInstallSuccessMsgTransitionsToResult verifies verify → result (success).
+func TestInstallSuccessMsgTransitionsToResult(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateVerify
+	updated, _ := m.Update(InstallSuccessMsg{EnvPath: "/tmp/.env"})
+	m = updated.(Model)
+	if m.state != StateResult {
+		t.Errorf("InstallSuccessMsg → state = %v, want StateResult", m.state)
+	}
+	if !m.result.success {
+		t.Error("result model should be success=true")
+	}
+}
+
+// TestInstallFailureMsgTransitionsToResult verifies failure at any stage → result.
+func TestInstallFailureMsgTransitionsToResult(t *testing.T) {
+	tests := []struct {
+		name  string
+		state State
+	}{
+		{"from pull", StatePull},
+		{"from deploy", StateDeploy},
+		{"from verify", StateVerify},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(buildTestDeps())
+			m.state = tt.state
+			updated, _ := m.Update(InstallFailureMsg{Stage: "test", Err: nil})
+			m = updated.(Model)
+			if m.state != StateResult {
+				t.Errorf("InstallFailureMsg → state = %v, want StateResult", m.state)
+			}
+			if m.result.success {
+				t.Error("result model should be success=false on failure")
+			}
+		})
+	}
+}
