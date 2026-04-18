@@ -308,10 +308,12 @@ func (m BootstrapModel) View() string {
 		sb.WriteString(m.theme.TextMuted.Render("The following commands require sudo to set up required directories:"))
 		sb.WriteString("\n\n")
 		for i, a := range m.actions {
-			bullet := fmt.Sprintf("  %d. %s\n", i+1, a.Description)
+			bullet := fmt.Sprintf("  %d. %s", i+1, a.Description)
 			sb.WriteString(m.theme.TextPrimary.Render(bullet))
-			cmdLine := fmt.Sprintf("     $ %s %s\n", a.Command, strings.Join(a.Args, " "))
+			sb.WriteString("\n")
+			cmdLine := fmt.Sprintf("     $ %s %s", a.Command, strings.Join(a.Args, " "))
 			sb.WriteString(m.theme.TextMuted.Render(cmdLine))
+			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
 		sb.WriteString(m.theme.Warning.Render("Press Y or Enter to execute, N or Esc to skip"))
@@ -341,10 +343,11 @@ func (m BootstrapModel) View() string {
 	}
 
 	// Show completed.
+	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(string(theme.ColorSuccess)))
 	for i, res := range m.results {
 		if res.Err == nil && i < len(m.actions) {
-			done := fmt.Sprintf("\n  ✓  %s", m.actions[i].Description)
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(string(theme.ColorSuccess))).Render(done))
+			sb.WriteString("\n  ")
+			sb.WriteString(successStyle.Render(fmt.Sprintf("✓  %s", m.actions[i].Description)))
 		}
 	}
 	sb.WriteString("\n")
