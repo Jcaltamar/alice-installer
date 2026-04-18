@@ -123,6 +123,7 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		Writer:               writer,
 		Assets:               embeddedAssets,
 		PreflightCoordinator: coord,
+		Executor:             tui.NewExecutor(),
 		MediaDir:             f.MediaDir,
 		ConfigDir:            f.ConfigDir,
 		RequiredTCPPorts:     defaultPorts,

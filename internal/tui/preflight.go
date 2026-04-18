@@ -41,6 +41,15 @@ func NewPreflightModel(th theme.Theme, coord preflight.Coordinator) PreflightMod
 	}
 }
 
+// Rearm resets the preflight state (clears report and error) and returns a
+// fresh Init cmd. This makes re-running preflight idempotent — the root model
+// calls this after a successful bootstrap to re-evaluate checks.
+func (p *PreflightModel) Rearm() tea.Cmd {
+	p.report = nil
+	p.err = nil
+	return p.Init()
+}
+
 // Init implements tea.Model.
 // Returns a Cmd that runs the coordinator and emits PreflightResultMsg.
 func (p PreflightModel) Init() tea.Cmd {

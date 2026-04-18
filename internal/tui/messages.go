@@ -144,3 +144,45 @@ type InstallFailureMsg struct {
 	Err   error
 	Stage string // e.g. "preflight", "pull", "deploy", "verify"
 }
+
+// ---------------------------------------------------------------------------
+// Bootstrap messages
+// ---------------------------------------------------------------------------
+
+// Action describes a single elevated command the bootstrap state will execute.
+type Action struct {
+	ID          string   // stable ID; matches CheckID when remediating a check
+	Description string   // human-readable summary
+	Command     string   // binary to run, e.g. "sudo"
+	Args        []string // arguments passed to Command
+}
+
+// BootstrapNeededMsg is emitted by the root model to signal that the bootstrap
+// state should be entered with the given action list.
+type BootstrapNeededMsg struct {
+	Actions []Action
+}
+
+// BootstrapConfirmedMsg is emitted when the user presses Y to approve all actions.
+type BootstrapConfirmedMsg struct{}
+
+// BootstrapSkippedMsg is emitted when the user declines the bootstrap (N or Esc).
+type BootstrapSkippedMsg struct{}
+
+// BootstrapActionResultMsg is posted by the executor after a single action finishes.
+type BootstrapActionResultMsg struct {
+	ActionID string
+	Err      error
+}
+
+// BootstrapCompleteMsg is emitted when all bootstrap actions have succeeded.
+type BootstrapCompleteMsg struct{}
+
+// BootstrapFailedMsg is emitted when a bootstrap action returns a non-nil error.
+type BootstrapFailedMsg struct {
+	ActionID string
+	Err      error
+}
+
+// PreflightReRunMsg signals that the preflight should be re-armed and re-run.
+type PreflightReRunMsg struct{}

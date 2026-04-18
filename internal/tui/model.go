@@ -19,15 +19,16 @@ import (
 type State int
 
 const (
-	StateSplash        State = iota
-	StatePreflight     State = iota
+	StateSplash         State = iota
+	StatePreflight      State = iota
+	StateBootstrap      State = iota // auto-elevation: sits between preflight and workspace-input
 	StateWorkspaceInput State = iota
-	StatePortScan      State = iota
-	StateEnvWrite      State = iota
-	StatePull          State = iota
-	StateDeploy        State = iota
-	StateVerify        State = iota
-	StateResult        State = iota
+	StatePortScan       State = iota
+	StateEnvWrite       State = iota
+	StatePull           State = iota
+	StateDeploy         State = iota
+	StateVerify         State = iota
+	StateResult         State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -53,6 +54,10 @@ type Dependencies struct {
 
 	PreflightCoordinator preflight.Coordinator
 
+	// Executor is used by the bootstrap state to run elevated commands.
+	// In production: NewExecutor(). In tests: *FakeExecutor.
+	Executor Executor
+
 	// Runtime config
 	MediaDir         string
 	ConfigDir        string
@@ -70,6 +75,7 @@ type Model struct {
 	// Sub-models (only the active one matters at any given time).
 	splash    SplashModel
 	preflight PreflightModel
+	bootstrap BootstrapModel
 	workspace WorkspaceInputModel
 	portscan  PortScanModel
 	envwrite  EnvWriteModel
@@ -171,10 +177,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.preflight.Init()
 
 	case PreflightResultMsg:
-		// Forward to preflight sub-model; state stays StatePreflight.
+		// Classify blockers: if all are fixable → bootstrap; any non-fixable → stay preflight.
+		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.MediaDir, m.deps.ConfigDir)
+		if len(nonFixable) > 0 {
+			// Non-fixable failure present — delegate to preflight sub-model as today.
+			updated, cmd := m.preflight.Update(msg)
+			m.preflight = updated
+			return m, cmd
+		}
+		if len(fixable) > 0 {
+			// All blockers are fixable → transition to bootstrap.
+			// Store the original report in preflight so that if the user skips,
+			// we can return to preflight with the frozen report intact.
+			updatedPf, _ := m.preflight.Update(msg)
+			m.preflight = updatedPf
+			exec := m.deps.Executor
+			if exec == nil {
+				exec = NewExecutor()
+			}
+			m.state = StateBootstrap
+			m.bootstrap = NewBootstrapModel(m.deps.Theme, exec, fixable)
+			return m, m.bootstrap.Init()
+		}
+		// No blockers at all → delegate to preflight (will emit PreflightPassedMsg on Enter).
 		updated, cmd := m.preflight.Update(msg)
 		m.preflight = updated
 		return m, cmd
+
+	case BootstrapCompleteMsg:
+		// All bootstrap actions succeeded — re-arm preflight and re-run checks.
+		m.state = StatePreflight
+		return m, m.preflight.Rearm()
+
+	case BootstrapSkippedMsg:
+		// User declined bootstrap — return to preflight with original report frozen.
+		m.state = StatePreflight
+		return m, nil
 
 	case PreflightPassedMsg:
 		m.state = StateWorkspaceInput
@@ -257,6 +295,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd = m.preflight.Update(msg)
 		m.preflight = updated
 
+	case StateBootstrap:
+		var updated BootstrapModel
+		updated, cmd = m.bootstrap.Update(msg)
+		m.bootstrap = updated
+
 	case StateWorkspaceInput:
 		var updated WorkspaceInputModel
 		updated, cmd = m.workspace.Update(msg)
@@ -310,6 +353,8 @@ func (m Model) View() string {
 		return m.splash.View()
 	case StatePreflight:
 		return m.preflight.View()
+	case StateBootstrap:
+		return m.bootstrap.View()
 	case StateWorkspaceInput:
 		return m.workspace.View()
 	case StatePortScan:
