@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +13,10 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/preflight"
 	"github.com/jcaltamar/alice-installer/internal/theme"
 )
+
+// preflightTimeout bounds the total coordinator run. Covers docker info + version
+// + compose version + GPU probe + dir probes + port scans serially, on a cold host.
+const preflightTimeout = 60 * time.Second
 
 // PreflightModel renders the preflight-checks screen.
 //
@@ -54,7 +59,7 @@ func (p *PreflightModel) Rearm() tea.Cmd {
 // Returns a Cmd that runs the coordinator and emits PreflightResultMsg.
 func (p PreflightModel) Init() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30)
+		ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 		defer cancel()
 		report := p.coord.Run(ctx)
 		return PreflightResultMsg{Report: report}
