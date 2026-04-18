@@ -157,3 +157,111 @@ func TestBootstrapModelViewConfirmingContainsActionsAndPrompt(t *testing.T) {
 		t.Errorf("view should contain N prompt, got:\n%s", view)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// T-DB-017/018: Banner screen
+// ---------------------------------------------------------------------------
+
+// buildTestBootstrapWithBanner builds a BootstrapModel with an action that has a PostActionBanner.
+func buildTestBootstrapWithBanner(banner string) (BootstrapModel, *FakeExecutor) {
+	fe := &FakeExecutor{
+		Results: []BootstrapActionResultMsg{{ActionID: "docker_group_add", Err: nil}},
+	}
+	actions := []Action{
+		{
+			ID:               "docker_group_add",
+			Description:      "Add user to docker group",
+			Command:          "sudo",
+			Args:             []string{"usermod", "-aG", "docker", "alice"},
+			PostActionBanner: banner,
+		},
+	}
+	m := NewBootstrapModel(theme.Default(), fe, actions)
+	return m, fe
+}
+
+// T-DB-017a: After last action succeeds with PostActionBanner, model enters banner screen.
+func TestBootstrapModelBannerScreenAfterActionWithBanner(t *testing.T) {
+	m, _ := buildTestBootstrapWithBanner("Log out and back in (or run `newgrp docker`).")
+	m.confirming = false // skip confirm
+
+	updated, cmd := m.Update(BootstrapActionResultMsg{ActionID: "docker_group_add", Err: nil})
+
+	// Should NOT immediately emit BootstrapCompleteMsg (banner screen intercepts).
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(BootstrapCompleteMsg); ok {
+			t.Error("action with PostActionBanner should NOT immediately emit BootstrapCompleteMsg")
+		}
+	}
+
+	// Model should be in banner-showing state.
+	if !updated.showingBanner {
+		t.Error("showingBanner should be true after action with PostActionBanner")
+	}
+}
+
+// T-DB-017b: Banner screen view shows the banner text.
+func TestBootstrapModelBannerScreenViewContainsBannerText(t *testing.T) {
+	m, _ := buildTestBootstrapWithBanner("Log out and back in.")
+	m.confirming = false
+	m.Update(BootstrapActionResultMsg{ActionID: "docker_group_add", Err: nil})
+
+	// Apply the result message to get the banner state.
+	updated, _ := m.Update(BootstrapActionResultMsg{ActionID: "docker_group_add", Err: nil})
+	updated.showingBanner = true
+	updated.banners = []string{"Log out and back in."}
+
+	view := updated.View()
+	if !strings.Contains(view, "Log out and back in.") {
+		t.Errorf("banner view should contain banner text, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Enter") {
+		t.Errorf("banner view should mention Enter to continue, got:\n%s", view)
+	}
+}
+
+// T-DB-017c: Pressing Enter in banner screen emits BootstrapCompleteMsg.
+func TestBootstrapModelBannerEnterEmitsComplete(t *testing.T) {
+	m, _ := buildTestBootstrapWithBanner("Log out and back in.")
+	m.confirming = false
+	m.showingBanner = true
+	m.banners = []string{"Log out and back in."}
+	m.done = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on banner screen should return a cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(BootstrapCompleteMsg); !ok {
+		t.Errorf("Enter on banner screen should emit BootstrapCompleteMsg, got %T", msg)
+	}
+}
+
+// T-DB-017d: Action with empty PostActionBanner immediately emits BootstrapCompleteMsg.
+func TestBootstrapModelNoBannerImmediateComplete(t *testing.T) {
+	fe := &FakeExecutor{
+		Results: []BootstrapActionResultMsg{{ActionID: "mkdir", Err: nil}},
+	}
+	actions := []Action{
+		{
+			ID:               "mkdir",
+			Description:      "Create directory",
+			Command:          "sudo",
+			Args:             []string{"sh", "-c", "mkdir -p /tmp/test"},
+			PostActionBanner: "", // no banner
+		},
+	}
+	m := NewBootstrapModel(theme.Default(), fe, actions)
+	m.confirming = false
+
+	_, cmd := m.Update(BootstrapActionResultMsg{ActionID: "mkdir", Err: nil})
+	if cmd == nil {
+		t.Fatal("last action without banner should return a cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(BootstrapCompleteMsg); !ok {
+		t.Errorf("action without banner should emit BootstrapCompleteMsg directly, got %T", msg)
+	}
+}

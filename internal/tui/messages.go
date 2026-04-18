@@ -151,10 +151,11 @@ type InstallFailureMsg struct {
 
 // Action describes a single elevated command the bootstrap state will execute.
 type Action struct {
-	ID          string   // stable ID; matches CheckID when remediating a check
-	Description string   // human-readable summary
-	Command     string   // binary to run, e.g. "sudo"
-	Args        []string // arguments passed to Command
+	ID               string   // stable ID; matches CheckID when remediating a check
+	Description      string   // human-readable summary
+	Command          string   // binary to run, e.g. "sudo"
+	Args             []string // arguments passed to Command
+	PostActionBanner string   // optional; non-empty → show interstitial banner after bootstrap completes
 }
 
 // BootstrapNeededMsg is emitted by the root model to signal that the bootstrap

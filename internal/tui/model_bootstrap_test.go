@@ -10,6 +10,9 @@ import (
 func buildTestDepsWithExecutor(exec Executor) Dependencies {
 	deps := buildTestDeps()
 	deps.Executor = exec
+	// Healthy env: docker present, user in group, systemd present.
+	// Tests that need specific Docker scenarios override this.
+	deps.Env = healthyEnv()
 	return deps
 }
 
@@ -32,9 +35,18 @@ func TestPreflightResultOnlyFixableBlockersToBootstrap(t *testing.T) {
 }
 
 // TestPreflightResultNonFixableBlocker → stays StatePreflight.
+// Uses non-systemd env so CheckDockerDaemon FAIL is non-fixable.
 func TestPreflightResultNonFixableBlockerStaysPreflight(t *testing.T) {
 	fe := &FakeExecutor{}
-	m := NewModel(buildTestDepsWithExecutor(fe))
+	deps := buildTestDepsWithExecutor(fe)
+	// Non-systemd stuck: docker binary present, user in group, but no systemd → non-fixable
+	deps.Env = BootstrapEnv{
+		UserName:            "testuser",
+		DockerBinaryPresent: true,
+		UserInDockerGroup:   true,
+		SystemdPresent:      false,
+	}
+	m := NewModel(deps)
 	m.state = StatePreflight
 
 	report := preflight.Report{
@@ -45,11 +57,33 @@ func TestPreflightResultNonFixableBlockerStaysPreflight(t *testing.T) {
 	updated, _ := m.Update(PreflightResultMsg{Report: report})
 	m = updated.(Model)
 	if m.state != StatePreflight {
-		t.Errorf("non-fixable blocker → state = %v, want StatePreflight", m.state)
+		t.Errorf("non-fixable blocker (non-systemd) → state = %v, want StatePreflight", m.state)
 	}
 }
 
-// TestPreflightResultMixedBlockers → stays StatePreflight.
+// TestPreflightResultDockerDaemonFixableGoesToBootstrap verifies Docker FAIL
+// with a fixable env (binary missing) goes to StateBootstrap.
+func TestPreflightResultDockerDaemonFixableGoesToBootstrap(t *testing.T) {
+	fe := &FakeExecutor{Results: []BootstrapActionResultMsg{{ActionID: ActionIDDockerInstall, Err: nil}}}
+	deps := buildTestDepsWithExecutor(fe)
+	deps.Env = noDockerEnv() // binary missing → fixable
+	m := NewModel(deps)
+	m.state = StatePreflight
+
+	report := preflight.Report{
+		Items: []preflight.CheckResult{
+			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusFail, Title: "Docker"},
+		},
+	}
+	updated, _ := m.Update(PreflightResultMsg{Report: report})
+	m = updated.(Model)
+	if m.state != StateBootstrap {
+		t.Errorf("docker_install fixable → state = %v, want StateBootstrap", m.state)
+	}
+}
+
+// TestPreflightResultMixedBlockersStaysPreflight uses compose fail (always non-fixable)
+// + media fail (fixable) → mixed → StatePreflight.
 func TestPreflightResultMixedBlockersStaysPreflight(t *testing.T) {
 	fe := &FakeExecutor{}
 	m := NewModel(buildTestDepsWithExecutor(fe))
@@ -57,14 +91,14 @@ func TestPreflightResultMixedBlockersStaysPreflight(t *testing.T) {
 
 	report := preflight.Report{
 		Items: []preflight.CheckResult{
-			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusFail, Title: "Docker"},
+			{ID: preflight.CheckComposeVersion, Status: preflight.StatusFail, Title: "Compose"},
 			{ID: preflight.CheckMediaWritable, Status: preflight.StatusFail, Title: "Media"},
 		},
 	}
 	updated, _ := m.Update(PreflightResultMsg{Report: report})
 	m = updated.(Model)
 	if m.state != StatePreflight {
-		t.Errorf("mixed blockers → state = %v, want StatePreflight", m.state)
+		t.Errorf("mixed blockers (compose+media) → state = %v, want StatePreflight", m.state)
 	}
 }
 

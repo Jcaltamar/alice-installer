@@ -87,8 +87,16 @@ func buildBootstrapFlowDeps(
 		},
 		PreflightCoordinator: coord,
 		Executor:             exec,
-		MediaDir:             "/tmp/media",
-		ConfigDir:            "/tmp/config",
+		// Default env for bootstrap flow tests: docker present, in group, no systemd.
+		// Individual tests that need Docker-specific classification override this.
+		Env: BootstrapEnv{
+			UserName:            "testuser",
+			DockerBinaryPresent: true,
+			UserInDockerGroup:   true,
+			SystemdPresent:      false,
+		},
+		MediaDir:  "/tmp/media",
+		ConfigDir: "/tmp/config",
 	}
 }
 

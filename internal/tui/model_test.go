@@ -41,8 +41,17 @@ func buildTestDeps() Dependencies {
 		Envgen:               &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "secret"}},
 		Writer:               &envgen.FakeWriter{Written: make(map[string][]byte)},
 		PreflightCoordinator: coord,
-		MediaDir:             "/tmp/media",
-		ConfigDir:            "/tmp/config",
+		// Default env: docker binary present, user in group, no systemd.
+		// This makes CheckDockerDaemon FAIL non-fixable by default.
+		// Tests that want docker fixable must override deps.Env explicitly.
+		Env: BootstrapEnv{
+			UserName:            "testuser",
+			DockerBinaryPresent: true,
+			UserInDockerGroup:   true,
+			SystemdPresent:      false,
+		},
+		MediaDir:  "/tmp/media",
+		ConfigDir: "/tmp/config",
 	}
 }
 

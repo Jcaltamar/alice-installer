@@ -58,6 +58,10 @@ type Dependencies struct {
 	// In production: NewExecutor(). In tests: *FakeExecutor.
 	Executor Executor
 
+	// Env holds the detected host environment used by ClassifyBlockers.
+	// In production: populated via DetectEnv(). In tests: inject as needed.
+	Env BootstrapEnv
+
 	// Runtime config
 	MediaDir         string
 	ConfigDir        string
@@ -178,7 +182,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PreflightResultMsg:
 		// Classify blockers: if all are fixable → bootstrap; any non-fixable → stay preflight.
-		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.MediaDir, m.deps.ConfigDir)
+		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.Env, m.deps.MediaDir, m.deps.ConfigDir)
 		if len(nonFixable) > 0 {
 			// Non-fixable failure present — delegate to preflight sub-model as today.
 			updated, cmd := m.preflight.Update(msg)

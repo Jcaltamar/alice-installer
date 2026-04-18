@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+// TestActionPostActionBannerField verifies the PostActionBanner field exists and defaults to "".
+func TestActionPostActionBannerField(t *testing.T) {
+	a := Action{
+		ID:      "test",
+		Command: "sudo",
+		Args:    []string{"echo"},
+	}
+	if a.PostActionBanner != "" {
+		t.Errorf("PostActionBanner zero value should be empty, got %q", a.PostActionBanner)
+	}
+	a.PostActionBanner = "Log out and back in."
+	if a.PostActionBanner != "Log out and back in." {
+		t.Errorf("PostActionBanner should be settable, got %q", a.PostActionBanner)
+	}
+}
+
 // TestBootstrapMessageTypes verifies that all bootstrap message types and Action
 // compile correctly and are distinct types.
 func TestBootstrapMessageTypes(t *testing.T) {
