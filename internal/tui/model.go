@@ -94,6 +94,12 @@ type Model struct {
 	envPath        string   // absolute path to the written .env
 	composeFiles   []string // computed once at env-write → pull transition
 	gpuDetected    bool
+
+	// attemptedActions tracks bootstrap Action IDs that have already been
+	// executed successfully in this session. Prevents bootstrap from looping
+	// when a preflight rerun still fails (e.g. systemctl enable returned 0
+	// but the daemon didn't actually come up, so docker_daemon still fails).
+	attemptedActions map[string]bool
 }
 
 // portsConfigFromMap converts the flat env-key → port map from PortScan into
@@ -125,12 +131,13 @@ func NewModel(deps Dependencies) Model {
 	gpuDetected := gpuInfo.ToolkitInstalled
 
 	return Model{
-		deps:        deps,
-		state:       StateSplash,
-		gpuDetected: gpuDetected,
-		splash:      NewSplashModel(deps.Theme),
-		preflight:   NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
-		workspace:   NewWorkspaceInputModel(deps.Theme),
+		deps:             deps,
+		state:            StateSplash,
+		gpuDetected:      gpuDetected,
+		attemptedActions: map[string]bool{},
+		splash:           NewSplashModel(deps.Theme),
+		preflight:        NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
+		workspace:        NewWorkspaceInputModel(deps.Theme),
 		portscan: NewPortScanModel(
 			deps.Theme,
 			deps.Ports,
@@ -183,16 +190,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PreflightResultMsg:
 		// Classify blockers: if all are fixable → bootstrap; any non-fixable → stay preflight.
 		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.Env, m.deps.MediaDir, m.deps.ConfigDir)
-		if len(nonFixable) > 0 {
-			// Non-fixable failure present — delegate to preflight sub-model as today.
+		// Filter out actions we've already attempted this session. An action
+		// that was executed, returned success, but didn't actually fix the
+		// root cause (common: systemctl enable returned 0 but the daemon
+		// failed to start) must NOT be retried — that's an infinite loop.
+		var freshFixable []Action
+		for _, a := range fixable {
+			if !m.attemptedActions[a.ID] {
+				freshFixable = append(freshFixable, a)
+			}
+		}
+		if len(nonFixable) > 0 || (len(fixable) > 0 && len(freshFixable) == 0) {
+			// Either classifier says non-fixable, or every fixable action has
+			// already been tried. Delegate to preflight so the user sees the
+			// failing report with the remediation hints.
 			updated, cmd := m.preflight.Update(msg)
 			m.preflight = updated
 			return m, cmd
 		}
-		if len(fixable) > 0 {
-			// All blockers are fixable → transition to bootstrap.
-			// Store the original report in preflight so that if the user skips,
-			// we can return to preflight with the frozen report intact.
+		if len(freshFixable) > 0 {
 			updatedPf, _ := m.preflight.Update(msg)
 			m.preflight = updatedPf
 			exec := m.deps.Executor
@@ -200,7 +216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				exec = NewExecutor()
 			}
 			m.state = StateBootstrap
-			m.bootstrap = NewBootstrapModel(m.deps.Theme, exec, fixable)
+			m.bootstrap = NewBootstrapModel(m.deps.Theme, exec, freshFixable)
 			return m, m.bootstrap.Init()
 		}
 		// No blockers at all → delegate to preflight (will emit PreflightPassedMsg on Enter).
@@ -209,7 +225,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case BootstrapCompleteMsg:
-		// All bootstrap actions succeeded — re-arm preflight and re-run checks.
+		// Record every action that was executed so the classifier won't re-queue
+		// them on the next preflight rerun. Re-detect env so stale snapshot data
+		// (DockerBinaryPresent=false after install, UserInDockerGroup=false after
+		// usermod) doesn't mislead the classifier.
+		for _, a := range m.bootstrap.actions {
+			m.attemptedActions[a.ID] = true
+		}
+		m.deps.Env = DetectEnv()
 		m.state = StatePreflight
 		return m, m.preflight.Rearm()
 
