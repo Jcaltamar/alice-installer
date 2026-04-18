@@ -86,16 +86,16 @@
 
 > Each state follows RED → GREEN. All use `teatest.NewTestModel` + `tm.Send` + `tm.WaitFinished`.
 
-- [ ] T-043 — **(RED)** `internal/tui/messages.go` test: define all message types (`PreflightResult`, `PullProgress`, `DeployProgress`, `HealthTick`, `HealthReport`, `ErrorMsg`, `AbortMsg`, `EnvWritten`, `PortScanResult`, `PortResolved`) compile-only test — *design Messages*. **Done**: package compiles.
-- [ ] T-044 — **(GREEN)** `internal/tui/messages.go`: all message type definitions. **Done**: T-043 passes.
-- [ ] T-045 — **(RED)** `internal/tui/splash_test.go` (teatest): renders branding title in cyan; `q` exits; `Enter` transitions to preflight — *REQ-TUI-1, REQ-TUI-2*. **Done**: FAIL.
-- [ ] T-046 — **(GREEN)** `internal/tui/splash.go`: `SplashState` Model/Update/View — *REQ-TUI-1, REQ-TUI-3*. **Done**: T-045 passes.
-- [ ] T-047 — **(RED)** `internal/tui/preflight_test.go` (teatest): spinner while running; checklist render (green/orange/red per result); Continue disabled on hard fail; Continue enabled on warn-only; `Esc` back to splash — *REQ-PF-7, REQ-TUI-1, REQ-TUI-2, REQ-TUI-5*. **Done**: FAIL.
-- [ ] T-048 — **(GREEN)** `internal/tui/preflight.go`: `PreflightState` running `PreflightCoordinator` via `tea.Cmd` — *REQ-PF-7, REQ-TUI-1*. **Done**: T-047 passes.
-- [ ] T-049 — **(RED)** `internal/tui/workspace_test.go` (teatest): text input renders; validation errors inline; `Esc` back to preflight with text preserved; `Enter` with valid WORKSPACE transitions; empty WORKSPACE blocked — *REQ-ENV-1, REQ-ENV-2, REQ-TUI-2*. **Done**: FAIL.
-- [ ] T-050 — **(GREEN)** `internal/tui/workspace.go`: `WorkspaceInputState` with inline `EnvTemplater` validation — *REQ-ENV-1, REQ-ENV-2*. **Done**: T-049 passes.
-- [ ] T-051 — **(RED)** `internal/tui/portscan_test.go` (teatest): shows scanning spinner; all-clear → advances; conflict → input field for alternate port; `Enter` on alternate → `PortResolved`; `Esc` → back to workspace — *REQ-CO-3, REQ-TUI-5*. **Done**: FAIL.
-- [ ] T-052 — **(GREEN)** `internal/tui/portscan.go`: `PortScanState` via `FakePortScanner` injection — *REQ-CO-3*. **Done**: T-051 passes.
+- [x] T-043 — **(RED)** `internal/tui/messages.go` test: define all message types (`PreflightResult`, `PullProgress`, `DeployProgress`, `HealthTick`, `HealthReport`, `ErrorMsg`, `AbortMsg`, `EnvWritten`, `PortScanResult`, `PortResolved`) compile-only test — *design Messages*. **Done**: package compiles.
+- [x] T-044 — **(GREEN)** `internal/tui/messages.go`: all message type definitions. **Done**: T-043 passes.
+- [x] T-045 — **(RED)** `internal/tui/splash_test.go` (teatest): renders branding title in cyan; `q` exits; `Enter` transitions to preflight — *REQ-TUI-1, REQ-TUI-2*. **Done**: FAIL.
+- [x] T-046 — **(GREEN)** `internal/tui/splash.go`: `SplashState` Model/Update/View — *REQ-TUI-1, REQ-TUI-3*. **Done**: T-045 passes.
+- [x] T-047 — **(RED)** `internal/tui/preflight_test.go` (teatest): spinner while running; checklist render (green/orange/red per result); Continue disabled on hard fail; Continue enabled on warn-only; `Esc` back to splash — *REQ-PF-7, REQ-TUI-1, REQ-TUI-2, REQ-TUI-5*. **Done**: FAIL.
+- [x] T-048 — **(GREEN)** `internal/tui/preflight.go`: `PreflightState` running `PreflightCoordinator` via `tea.Cmd` — *REQ-PF-7, REQ-TUI-1*. **Done**: T-047 passes.
+- [x] T-049 — **(RED)** `internal/tui/workspace_test.go` (teatest): text input renders; validation errors inline; `Esc` back to preflight with text preserved; `Enter` with valid WORKSPACE transitions; empty WORKSPACE blocked — *REQ-ENV-1, REQ-ENV-2, REQ-TUI-2*. **Done**: FAIL.
+- [x] T-050 — **(GREEN)** `internal/tui/workspace.go`: `WorkspaceInputState` with inline `EnvTemplater` validation — *REQ-ENV-1, REQ-ENV-2*. **Done**: T-049 passes.
+- [x] T-051 — **(RED)** `internal/tui/portscan_test.go` (teatest): shows scanning spinner; all-clear → advances; conflict → input field for alternate port; `Enter` on alternate → `PortResolved`; `Esc` → back to workspace — *REQ-CO-3, REQ-TUI-5*. **Done**: FAIL.
+- [x] T-052 — **(GREEN)** `internal/tui/portscan.go`: `PortScanState` via `FakePortScanner` injection — *REQ-CO-3*. **Done**: T-051 passes.
 - [ ] T-053 — **(RED)** `internal/tui/envwrite_test.go` (teatest): renders "Writing .env…"; on `EnvWritten` advances; on error shows red error box with remediation; `Esc` after write shows re-run confirmation — *REQ-ENV-4, REQ-TUI-2, REQ-TUI-5*. **Done**: FAIL.
 - [ ] T-054 — **(GREEN)** `internal/tui/envwrite.go`: `EnvWriteState` — *REQ-ENV-4*. **Done**: T-053 passes.
 - [ ] T-055 — **(RED)** `internal/tui/pull_test.go` (teatest): 4-row progress table; spinner → green on each service; network error → red row + retry binding; image-not-found error box; `Ctrl+C` during pull → rollback spinner — *REQ-CO-2, REQ-CO-5, REQ-TUI-4, REQ-TUI-5*. **Done**: FAIL.

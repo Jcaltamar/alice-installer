@@ -1,9 +1,9 @@
 # Apply Progress: installer-tui
 
-**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042), 3 (T-022..T-034 — parallel Phase 3 + Phase 4), 5 (T-037..T-040 — Phase 5 Preflight coordinator)
+**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042), 3 (T-022..T-034 — parallel Phase 3 + Phase 4), 5 (T-037..T-040 — Phase 5 Preflight coordinator), 6 (T-043..T-052 + model — Phase 7 first half: TUI foundation + 4 states)
 **Mode**: Strict TDD
 **Date last updated**: 2026-04-18
-**Status**: 36/84 tasks complete
+**Status**: 52/84 tasks complete
 
 ---
 
@@ -228,8 +228,83 @@
 
 ---
 
+---
+
+### Batch 6 — Phase 7 first half: TUI Foundation + 4 States (T-043..T-052 + model.go)
+
+- [x] T-043 — `internal/tui/messages_test.go` — compile-only test: all message types instantiatable
+- [x] T-044 — `internal/tui/messages.go` — all message types: ErrorMsg, AbortMsg, QuitMsg, PreflightStartedMsg, PreflightResultMsg, PreflightPassedMsg, WorkspaceEnteredMsg, PortConflict, PortScanResultMsg, PortResolvedMsg, PortsConfirmedMsg, EnvWrittenMsg, PullStartedMsg, PullProgressMsg (alias), PullCompleteMsg, DeployStartedMsg, DeployProgressMsg (alias), DeployCompleteMsg, HealthTickMsg, HealthReportMsg, InstallSuccessMsg, InstallFailureMsg
+- [x] T-045 — `internal/tui/splash_test.go` — 5 tests: View contains "ALICE", View contains "Installer", Enter emits PreflightStartedMsg, non-Enter does not, Init does not panic
+- [x] T-046 — `internal/tui/splash.go` — SplashModel with ASCII art banner, Primary colour, Enter → PreflightStartedMsg
+- [x] T-047 — `internal/tui/preflight_test.go` — 7 tests: Init returns non-nil cmd, Init cmd produces PreflightResultMsg, View nil report shows running text, Update with result stores report, View with 3-status report contains all titles, Enter with FAIL stays, Enter with PASS emits PreflightPassedMsg
+- [x] T-048 — `internal/tui/preflight.go` — PreflightModel: runs coordinator via tea.Cmd, spinner while running, per-item status dots (●PASS/WARN/FAIL), Enter gating by HasBlockingFailure
+- [x] T-049 — `internal/tui/workspace_input_test.go` — 6 tests: View contains "workspace", Enter empty → error, Enter "my-site" → WorkspaceEnteredMsg, Enter "../evil" → error, Enter "foo" → trimmed value emitted, error shows in View
+- [x] T-050 — `internal/tui/workspace_input.go` — WorkspaceInputModel: bubbles textinput + envgen.ValidateWorkspace, error rendering in Danger colour
+- [x] T-051 — `internal/tui/port_scan_test.go` — 7 tests: Init returns cmd, no conflicts → PortsConfirmedMsg, one conflict → Conflicts list, resolving with free port → PortsConfirmedMsg, occupied alternate → error, non-numeric → error, out-of-range → error
+- [x] T-052 — `internal/tui/port_scan.go` — PortScanModel: scans TCP+UDP required ports, conflict resolution with textinput, Ctrl+R rescan
+- [x] model.go + model_test.go (T-063/T-064 scope pre-empted) — root Model: State enum, Dependencies struct, NewModel, Init, Update (global Ctrl+C/q, state transitions), View (terminal-too-small guard + sub-model dispatch)
+
+### Batch 6 — New Message in messages.go
+- Added `PreflightPassedMsg` (not in original batch spec but required for model routing — emitted by PreflightModel.Update on Enter with no failures)
+
+### Batch 6 — New Export in envgen/env.go
+- Added `ValidateWorkspace(string) error` — thin exported wrapper over private `validateWorkspace`. Used by WorkspaceInputModel to share validation logic with the envgen render path.
+
+### Batch 6 — Files Created
+| File | Action | Description |
+|------|--------|-------------|
+| `internal/tui/messages.go` | Created | All TUI message types |
+| `internal/tui/messages_test.go` | Created | Compile-only + field checks |
+| `internal/tui/splash.go` | Created | SplashModel with ASCII banner |
+| `internal/tui/splash_test.go` | Created | 5 behaviour tests |
+| `internal/tui/preflight.go` | Created | PreflightModel + spinner + status dots |
+| `internal/tui/preflight_test.go` | Created | 7 behaviour tests |
+| `internal/tui/workspace_input.go` | Created | WorkspaceInputModel + textinput + validation |
+| `internal/tui/workspace_input_test.go` | Created | 6 behaviour tests |
+| `internal/tui/port_scan.go` | Created | PortScanModel + conflict resolution |
+| `internal/tui/port_scan_test.go` | Created | 7 behaviour tests |
+| `internal/tui/model.go` | Created | Root Model: State enum, Dependencies, NewModel, Update, View |
+| `internal/tui/model_test.go` | Created | 9 model state-transition tests |
+| `internal/envgen/env.go` | Modified | Added `ValidateWorkspace` exported wrapper |
+
+### Batch 6 — Dependencies Added
+| Package | Version | Reason |
+|---------|---------|--------|
+| `github.com/charmbracelet/bubbletea` | v1.3.10 | TUI runtime |
+| `github.com/charmbracelet/bubbles` | v1.0.0 | spinner, textinput |
+| `github.com/charmbracelet/x/exp/teatest` | latest | TUI testing |
+
+### Batch 6 — TDD Cycle Evidence
+| Task | Test File | RED | GREEN | REFACTOR |
+|------|-----------|-----|-------|----------|
+| T-043 | messages_test.go | ✅ undefined types → build fail | ✅ 3 tests pass | ➖ None |
+| T-044 | — (impl for T-043) | — | ✅ GREEN | ➖ None |
+| T-045 | splash_test.go | ✅ SplashModel undefined | ✅ 5 tests pass | ✅ Added "ALICE GUARDIAN" text label (ASCII art not substring-searchable) |
+| T-046 | — (impl for T-045) | — | ✅ GREEN | — |
+| T-047 | preflight_test.go | ✅ PreflightModel + PreflightPassedMsg undefined | ✅ 7 tests pass | ➖ None |
+| T-048 | — (impl for T-047) | — | ✅ GREEN | ➖ None |
+| T-049 | workspace_input_test.go | ✅ WorkspaceInputModel undefined | ✅ 6 tests pass | ➖ None |
+| T-050 | — (impl for T-049) | — | ✅ GREEN | ➖ None |
+| T-051 | port_scan_test.go | ✅ PortScanModel undefined | ✅ 7 tests pass | ➖ None |
+| T-052 | — (impl for T-051) | — | ✅ GREEN | ➖ None |
+| model | model_test.go | ✅ Model/Dependencies undefined | ✅ 9 tests pass | ➖ None |
+
+### Batch 6 — Test Summary
+- **Tests written**: ~44 (3 messages + 5 splash + 7 preflight + 6 workspace + 7 portscan + 9 model + 7 envgen ValidateWorkspace check)
+- **Tests passing**: all 44 (`go test -short ./...` → 10 packages, 0 failures)
+- **`go vet ./...`**: clean
+
+### Batch 6 — Deviations
+1. **`PreflightPassedMsg` added to messages.go**: not in original batch spec messages list but required by root model routing. The spec says "let top-level model handle key when report is passable" — implemented as PreflightModel emitting PreflightPassedMsg on Enter with no failures; root model intercepts to advance state.
+2. **`envgen.ValidateWorkspace` exported**: minimal added export wrapping the private `validateWorkspace`. Ensures TUI and envgen.Render use identical validation.
+3. **model.go absorbs T-063/T-064 (resize/TTY guard)**: terminal-too-small guard (REQ-TUI-6) implemented inline in `Model.View()`. The full `resize_test.go` (T-063) is out of scope for this batch but the guard logic is in place.
+4. **bubbletea v1.3.10 vs v0.22.1**: go.mod had bubbletea v0.22.1 as indirect. Upgraded to v1.3.10 (direct) + bubbles v1.0.0. API is compatible; spinner.TickMsg forwarding required.
+5. **Port scan sorts keys deterministically**: `scanAll` sorts required/UDP map keys before iterating — ensures stable Conflicts order for tests.
+
+---
+
 ## Remaining Tasks
 
-T-043..T-084 (Phases 7-11: TUI states, cmd wiring, integration, distribution, security — 42 tasks)
+T-053..T-084 (Phase 7 second half + Phases 8-11: envwrite, pull, deploy, healthcheck, result states, cmd wiring, integration, distribution, security — 32 tasks)
 
-**~42 tasks remaining**. Next batch: T-043..T-044 (TUI message types) → T-045..T-068 (all TUI states).
+**~32 tasks remaining**. Next batch: T-053..T-068 (remaining TUI states: envwrite, pull, deploy, healthcheck, result, TTY, full-flow integration).

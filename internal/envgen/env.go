@@ -51,6 +51,14 @@ type Templater struct {
 // workspaceRe allows only alphanumeric, dash, and underscore characters.
 var workspaceRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// ValidateWorkspace is the exported workspace name validator.
+// It returns an error if the name is not safe for use as a filesystem path component.
+// Rules: non-empty, alphanumeric/dash/underscore only, no whitespace, no leading dot,
+// no path separators, max 64 chars.
+func ValidateWorkspace(ws string) error {
+	return validateWorkspace(ws)
+}
+
 // validateWorkspace returns an error if the workspace name is not safe for the filesystem.
 func validateWorkspace(ws string) error {
 	trimmed := strings.TrimSpace(ws)
