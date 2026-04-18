@@ -27,17 +27,17 @@
 
 ## Phase 2: Platform & Ports (pure-Go, TDD first)
 
-- [ ] T-011 — **(RED)** `internal/platform/arch_test.go`: table-driven, inject fake `runtime.GOARCH`; assert amd64/arm64 → ok; 386/darwin → error — *REQ-PF-1, REQ-PF-2*. **Done**: tests FAIL (no impl).
-- [ ] T-012 — **(GREEN)** `internal/platform/arch.go`: `ArchDetector` interface + `RuntimeArch` impl — *REQ-PF-2*. **Done**: T-011 passes.
-- [ ] T-013 — **(RED)** `internal/platform/os_test.go`: assert Linux → ok; non-Linux → `ErrUnsupportedOS` — *REQ-PF-1*. **Done**: FAIL.
-- [ ] T-014 — **(GREEN)** `internal/platform/os.go`: `OSGuard` interface + `RuntimeOS` impl — *REQ-PF-1*. **Done**: T-013 passes.
-- [ ] T-015 — **(FAKE)** `internal/platform/fake.go`: `FakeArchDetector`, `FakeOSGuard` with injectable return values — *prerequisite for downstream tests*.
-- [ ] T-016 — **(RED)** `internal/platform/gpu_test.go`: table-driven; mock `docker info` JSON with `nvidia` runtime present → gpu true; absent → false; nvidia-smi fallback path — *REQ-PF-5*. **Done**: FAIL.
-- [ ] T-017 — **(GREEN)** `internal/platform/gpu.go`: `GPUDetector` interface + `DockerRuntimeGPU` impl (shells to `docker info --format '{{json .Runtimes}}'` + `nvidia-smi` fallback) — *REQ-PF-5*. **Done**: T-016 passes.
-- [ ] T-018 — **(FAKE)** `internal/platform/fake.go`: add `FakeGPUDetector`.
-- [ ] T-019 — **(RED)** `internal/ports/scanner_test.go`: TCP port available/occupied (use `t.TempDir` listener); UDP 8189 available; `FirstAvailableTCP` returns next free — *REQ-CO-3 prerequisite*. **Done**: FAIL.
-- [ ] T-020 — **(GREEN)** `internal/ports/scanner.go`: `PortScanner` interface + `NetPortScanner` (`net.Listen` for TCP, `net.ListenPacket` for UDP) — *design ports*. **Done**: T-019 passes.
-- [ ] T-021 — **(FAKE)** `internal/ports/fake.go`: `FakePortScanner` with `OccupiedPorts []int` field.
+- [x] T-011 — **(RED)** `internal/platform/arch_test.go`: table-driven, inject fake `runtime.GOARCH`; assert amd64/arm64 → ok; 386/darwin → error — *REQ-PF-1, REQ-PF-2*. **Done**: tests FAIL (no impl).
+- [x] T-012 — **(GREEN)** `internal/platform/arch.go`: `ArchDetector` interface + `RuntimeArch` impl — *REQ-PF-2*. **Done**: T-011 passes.
+- [x] T-013 — **(RED)** `internal/platform/os_test.go`: assert Linux → ok; non-Linux → `ErrUnsupportedOS` — *REQ-PF-1*. **Done**: FAIL.
+- [x] T-014 — **(GREEN)** `internal/platform/os.go`: `OSGuard` interface + `RuntimeOS` impl — *REQ-PF-1*. **Done**: T-013 passes.
+- [x] T-015 — **(FAKE)** `internal/platform/fake.go`: `FakeArchDetector`, `FakeOSGuard` with injectable return values — *prerequisite for downstream tests*.
+- [x] T-016 — **(RED)** `internal/platform/gpu_test.go`: table-driven; mock `docker info` JSON with `nvidia` runtime present → gpu true; absent → false; nvidia-smi fallback path — *REQ-PF-5*. **Done**: FAIL.
+- [x] T-017 — **(GREEN)** `internal/platform/gpu.go`: `GPUDetector` interface + `DockerRuntimeGPU` impl (shells to `docker info --format '{{json .Runtimes}}'` + `nvidia-smi` fallback) — *REQ-PF-5*. **Done**: T-016 passes.
+- [x] T-018 — **(FAKE)** `internal/platform/fake.go`: add `FakeGPUDetector`.
+- [x] T-019 — **(RED)** `internal/ports/scanner_test.go`: TCP port available/occupied (use `t.TempDir` listener); UDP 8189 available; `FirstAvailableTCP` returns next free — *REQ-CO-3 prerequisite*. **Done**: FAIL.
+- [x] T-020 — **(GREEN)** `internal/ports/scanner.go`: `PortScanner` interface + `NetPortScanner` (`net.Listen` for TCP, `net.ListenPacket` for UDP) — *design ports*. **Done**: T-019 passes.
+- [x] T-021 — **(FAKE)** `internal/ports/fake.go`: `FakePortScanner` with `OccupiedPorts []int` field.
 
 ---
 
@@ -77,8 +77,8 @@
 
 ## Phase 6: Theme
 
-- [ ] T-041 — **(RED)** `internal/theme/theme_test.go`: assert exact hex values for all 10 tokens from design (Background #0f172a, Accent #22d3ee, Success #22c55e, Destructive #ef4444, Warning #f59e0b, Muted #64748b, + Surface, TextPrimary, TextMuted, Border) — *REQ-TUI-3*. **Done**: FAIL.
-- [ ] T-042 — **(GREEN)** `internal/theme/theme.go`: `Theme` struct with `lipgloss.Color` fields + constructor `New()` — *REQ-TUI-3*. **Done**: T-041 passes.
+- [x] T-041 — **(RED)** `internal/theme/theme_test.go`: assert exact hex values for all 10 tokens from design (Background #0f172a, Accent #22d3ee, Success #22c55e, Destructive #ef4444, Warning #f59e0b, Muted #64748b, + Surface, TextPrimary, TextMuted, Border) — *REQ-TUI-3*. **Done**: FAIL.
+- [x] T-042 — **(GREEN)** `internal/theme/theme.go`: `Theme` struct with `lipgloss.Color` fields + constructor `New()` — *REQ-TUI-3*. **Done**: T-041 passes.
 
 ---
 
