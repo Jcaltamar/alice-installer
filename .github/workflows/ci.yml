@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (short, race)
+        run: go test -short -race ./...
+
+      - name: Test (cover)
+        run: go test -cover ./...
+
+      - name: Build smoke (compile only)
+        run: go build ./cmd/installer
+
+  integration-amd64:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Verify docker
+        run: docker version
+
+      - name: Verify docker compose
+        run: docker compose version
+
+      - name: Integration tests (amd64)
+        run: go test -tags=integration ./internal/tui/integration/...
+
+  integration-arm64:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Build arm64 binary
+        run: |
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+            go build -trimpath -o ./alice-installer-arm64 ./cmd/installer
+
+      - name: Smoke arm64 binary under QEMU
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD:/app" -w /app \
+            alpine:latest \
+            ./alice-installer-arm64 --version

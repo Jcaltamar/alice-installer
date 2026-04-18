@@ -1,6 +1,9 @@
 package envgen
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 // FileWriter writes rendered .env data to the filesystem.
 type FileWriter interface {
@@ -12,9 +15,15 @@ type FileWriter interface {
 type AtomicWriter struct{}
 
 // WriteEnv writes data to path atomically via a .tmp sibling file.
-// The resulting file has 0600 permissions.
-// If the rename fails, the .tmp file is cleaned up before returning the error.
+//   - The parent directory is created with 0700 permissions if it does not exist.
+//   - The resulting file has 0600 permissions (private to the owner).
+//   - If the rename fails, the .tmp file is cleaned up before returning the error.
 func (AtomicWriter) WriteEnv(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
 	tmp := path + ".tmp"
 
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {

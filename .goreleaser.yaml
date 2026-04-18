@@ -1,0 +1,57 @@
+version: 2
+project_name: alice-installer
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: alice-installer
+    main: ./cmd/installer
+    binary: alice-installer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - RUNBOOK.md
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: Jcaltamar
+    name: alice-installer
+  draft: true
+  prerelease: auto
+  name_template: "{{.ProjectName}} {{.Tag}}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

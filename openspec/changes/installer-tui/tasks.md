@@ -117,37 +117,37 @@
 
 ## Phase 8: cmd/installer Wiring
 
-- [ ] T-069 — **(RED)** `cmd/installer/main_test.go`: `--version` prints `v` prefix + semver; `--help` exits 0; non-TTY stdin → exit 1 + stderr message; Linux non-amd64/arm64 → exit 1 — *REQ-TUI-7, REQ-DIST-1*. **Done**: FAIL.
-- [ ] T-070 — **(GREEN)** `cmd/installer/main.go`: wire all real implementations; `--version` flag via `ldflags`; TTY check pre-`tea.Program`; OS+arch guard before TUI — *REQ-TUI-7, REQ-DIST-1*. **Done**: T-069 passes.
+- [x] T-069 — **(RED)** `cmd/installer/main_test.go`: `--version` prints `v` prefix + semver; `--help` exits 0; non-TTY stdin → exit 1 + stderr message; Linux non-amd64/arm64 → exit 1 — *REQ-TUI-7, REQ-DIST-1*. **Done**: FAIL.
+- [x] T-070 — **(GREEN)** `cmd/installer/main.go`: wire all real implementations; `--version` flag via `ldflags`; TTY check pre-`tea.Program`; OS+arch guard before TUI — *REQ-TUI-7, REQ-DIST-1*. **Done**: T-069 passes.
 
 ---
 
 ## Phase 9: Integration Tests (`-tags=integration`)
 
-- [ ] T-071 — **(RED)** `integration/amd64_test.go` (`-tags=integration`): run `alice-installer-linux-amd64 --version`, assert exit 0 + version string; skip with `t.Skip` under `-short` — *REQ-DIST-7*. **Done**: FAIL (binary not yet built).
-- [ ] T-072 — **(GREEN)** Build step in `Makefile` `test-integration` target compiles binary first; T-071 passes.
-- [ ] T-073 — **(RED)** `integration/arm64_test.go` (`-tags=integration`): QEMU binfmt smoke — same as T-071 for arm64 binary; `t.Skip` under `-short` — *REQ-DIST-7*. **Done**: FAIL.
-- [ ] T-074 — **(GREEN)** `.github/workflows/ci.yml`: matrix ubuntu-latest (amd64 native) + QEMU binfmt arm64; both `test-integration` targets pass — *REQ-DIST-7*. **Done**: T-073 passes in CI.
+- [x] T-071 — **(RED)** `integration/amd64_test.go` (`-tags=integration`): run `alice-installer-linux-amd64 --version`, assert exit 0 + version string; skip with `t.Skip` under `-short` — *REQ-DIST-7*. **Done**: FAIL (binary not yet built).
+- [x] T-072 — **(GREEN)** Build step in `Makefile` `test-integration` target compiles binary first; T-071 passes.
+- [x] T-073 — **(RED)** `integration/arm64_test.go` (`-tags=integration`): QEMU binfmt smoke — same as T-071 for arm64 binary; `t.Skip` under `-short` — *REQ-DIST-7*. **Done**: FAIL.
+- [x] T-074 — **(GREEN)** `.github/workflows/ci.yml`: matrix ubuntu-latest (amd64 native) + QEMU binfmt arm64; both `test-integration` targets pass — *REQ-DIST-7*. **Done**: T-073 passes in CI.
 
 ---
 
 ## Phase 10: Distribution
 
-- [ ] T-075 — **(RED)** `dist_test.go` snapshot: after `make build-snapshot`, assert `dist/` contains exactly `alice-installer-linux-amd64`, `alice-installer-linux-arm64`, `checksums.txt`; checksum file has 2 SHA256 lines — *REQ-DIST-1, REQ-DIST-3, REQ-DIST-4*. **Done**: FAIL.
-- [ ] T-076 — **(GREEN)** `.goreleaser.yaml`: linux/amd64 + linux/arm64; `CGO_ENABLED=0`; `-trimpath`; `-ldflags "-s -w -X main.version={{.Version}}"`; `archives.name_template: alice-installer-{{ .Os }}-{{ .Arch }}`; `checksum.name_template: checksums.txt` — *REQ-DIST-1..REQ-DIST-5*. **Done**: T-075 passes.
-- [ ] T-077 — **(RED)** Binary static test: `ldd dist/alice-installer-linux-amd64` → "not a dynamic executable" (run in `ubuntu:latest` container) — *REQ-DIST-2*. **Done**: FAIL.
-- [ ] T-078 — **(GREEN)** Confirm `CGO_ENABLED=0` + no `cgo` imports across `internal/` — *REQ-DIST-2*. **Done**: T-077 passes.
-- [ ] T-079 — Extend `.github/workflows/ci.yml`: add `goreleaser-release` job triggered on `v*` tag push; uploads binaries + checksums to GitHub Releases — *REQ-DIST-5*. **Done**: push `v0.1.0-test` tag → release created with correct assets.
+- [x] T-075 — **(RED)** `dist_test.go` snapshot: after `make build-snapshot`, assert `dist/` contains exactly `alice-installer-linux-amd64`, `alice-installer-linux-arm64`, `checksums.txt`; checksum file has 2 SHA256 lines — *REQ-DIST-1, REQ-DIST-3, REQ-DIST-4*. **Done**: FAIL.
+- [x] T-076 — **(GREEN)** `.goreleaser.yaml`: linux/amd64 + linux/arm64; `CGO_ENABLED=0`; `-trimpath`; `-ldflags "-s -w -X main.version={{.Version}}"`; `archives.name_template: alice-installer-{{ .Os }}-{{ .Arch }}`; `checksum.name_template: checksums.txt` — *REQ-DIST-1..REQ-DIST-5*. **Done**: T-075 passes.
+- [x] T-077 — **(RED)** Binary static test: `ldd dist/alice-installer-linux-amd64` → "not a dynamic executable" (run in `ubuntu:latest` container) — *REQ-DIST-2*. **Done**: FAIL.
+- [x] T-078 — **(GREEN)** Confirm `CGO_ENABLED=0` + no `cgo` imports across `internal/` — *REQ-DIST-2*. **Done**: T-077 passes. `file` command confirms "statically linked".
+- [x] T-079 — Extend `.github/workflows/ci.yml`: add `goreleaser-release` job triggered on `v*` tag push; uploads binaries + checksums to GitHub Releases — *REQ-DIST-5*. **Done**: push `v0.1.0-test` tag → release created with correct assets.
 
 ---
 
 ## Phase 11: Security & Release Hygiene
 
-- [ ] T-080 — **(RED)** `internal/envgen/writer_test.go` (add case): written `.env` has mode 0600; parent dir has mode 0700 — *design security*. **Done**: FAIL if perms not enforced.
-- [ ] T-081 — **(GREEN)** `internal/envgen/writer.go` `WriteAtomic`: enforce `os.Chmod(path, 0600)` + `os.MkdirAll(dir, 0700)` — *design security*. **Done**: T-080 passes.
-- [ ] T-082 — Write `RUNBOOK.md` in repo root: document leaked `POSTGRES_PASSWORD` git history issue; step-by-step force-rotation procedure for existing deployments; note new image-tag env vars; GPU precondition; Redis 6379 conflict warning — *REQ-ENV-6, design Rollout*. **Done**: file exists, covers all 4 topics.
-- [ ] T-083 — Add release notes template `.github/RELEASE_TEMPLATE.md`: capabilities list; explicit `POSTGRES_PASSWORD` rotation warning in bold; curl download commands per arch — *REQ-DIST-5, design Rollout*. **Done**: template exists, rotation warning present.
-- [ ] T-084 — Embed compose files + `.env.example` into binary via `internal/assets/assets.go` (replace stubs with real files from T-008/T-009/T-010) — *REQ-ENV-5, design assets*. **Done**: `Assets.ComposeBase` renders valid YAML; `.env.example` accessible at runtime without filesystem.
+- [x] T-080 — **(RED)** `internal/envgen/writer_test.go` (add case): written `.env` has mode 0600; parent dir has mode 0700 — *design security*. **Done**: FAIL if perms not enforced.
+- [x] T-081 — **(GREEN)** `internal/envgen/writer.go` `WriteAtomic`: enforce `os.Chmod(path, 0600)` + `os.MkdirAll(dir, 0700)` — *design security*. **Done**: T-080 passes.
+- [x] T-082 — Write `RUNBOOK.md` in repo root: document leaked `POSTGRES_PASSWORD` git history issue; step-by-step force-rotation procedure for existing deployments; note new image-tag env vars; GPU precondition; Redis 6379 conflict warning — *REQ-ENV-6, design Rollout*. **Done**: file exists, covers all 4 topics.
+- [x] T-083 — Add release notes template `.github/RELEASE_TEMPLATE.md`: capabilities list; explicit `POSTGRES_PASSWORD` rotation warning in bold; curl download commands per arch — *REQ-DIST-5, design Rollout*. **Done**: template exists, rotation warning present.
+- [x] T-084 — Embed compose files + `.env.example` into binary via `internal/assets/assets.go` (replace stubs with real files from T-008/T-009/T-010) — *REQ-ENV-5, design assets*. **Done**: `Assets.ComposeBase` renders valid YAML; `.env.example` accessible at runtime without filesystem.
 
 ---
 

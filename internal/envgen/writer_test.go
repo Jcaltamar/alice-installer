@@ -114,13 +114,23 @@ func TestAtomicWriter_WriteEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("write to non-existent directory returns error", func(t *testing.T) {
+	t.Run("write to non-existent parent directory creates it", func(t *testing.T) {
+		// T-081: AtomicWriter.WriteEnv now calls os.MkdirAll(dir, 0700) before writing.
+		// A missing parent directory is created automatically (no error).
 		path := filepath.Join(t.TempDir(), "nonexistent", ".env")
 
 		w := envgen.AtomicWriter{}
-		err := w.WriteEnv(path, []byte("KEY=val\n"))
-		if err == nil {
-			t.Error("expected error writing to non-existent parent directory, got nil")
+		if err := w.WriteEnv(path, []byte("KEY=val\n")); err != nil {
+			t.Errorf("expected WriteEnv to create missing parent dir, got error: %v", err)
+		}
+
+		// File must exist with correct content.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("file not created: %v", err)
+		}
+		if string(data) != "KEY=val\n" {
+			t.Errorf("content = %q, want \"KEY=val\\n\"", data)
 		}
 	})
 }
@@ -149,6 +159,59 @@ func TestFakeWriter(t *testing.T) {
 		err := fw.WriteEnv("/tmp/test.env", []byte("data"))
 		if err != fakeWriteErr {
 			t.Errorf("got %v, want %v", err, fakeWriteErr)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// T-080 Security: parent directory permissions (RED first, GREEN after writer.go update)
+// ---------------------------------------------------------------------------
+
+func TestAtomicWriter_ParentDirCreatedWith0700(t *testing.T) {
+	t.Run("creates parent directory with 0700 if it does not exist", func(t *testing.T) {
+		base := t.TempDir()
+		// Use a sub-directory that does NOT exist yet.
+		subDir := filepath.Join(base, "newdir")
+		path := filepath.Join(subDir, ".env")
+
+		w := envgen.AtomicWriter{}
+		if err := w.WriteEnv(path, []byte("KEY=val\n")); err != nil {
+			t.Fatalf("WriteEnv() error: %v", err)
+		}
+
+		// Verify the file was written.
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("file not created: %v", err)
+		}
+
+		// Verify parent directory mode is 0700.
+		info, err := os.Stat(subDir)
+		if err != nil {
+			t.Fatalf("Stat parent dir: %v", err)
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o700 {
+			t.Errorf("parent dir permissions = %04o, want 0700", perm)
+		}
+	})
+
+	t.Run("file still has 0600 when parent was created by WriteEnv", func(t *testing.T) {
+		base := t.TempDir()
+		subDir := filepath.Join(base, "anotherdir")
+		path := filepath.Join(subDir, ".env")
+
+		w := envgen.AtomicWriter{}
+		if err := w.WriteEnv(path, []byte("KEY=val\n")); err != nil {
+			t.Fatalf("WriteEnv() error: %v", err)
+		}
+
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat file: %v", err)
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o600 {
+			t.Errorf("file permissions = %04o, want 0600", perm)
 		}
 	})
 }

@@ -428,6 +428,76 @@ func TestTemplater_Render_WorkspaceSubstituted(t *testing.T) {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+// T-084 — Embedded-asset smoke test
+// Renders the real .env.example from internal/assets through Templater.Render
+// and asserts critical fields: WORKSPACE, POSTGRES_PASSWORD length, REDIS_IMAGE.
+// ---------------------------------------------------------------------------
+
+func TestTemplater_Render_EmbeddedAssetSmoke(t *testing.T) {
+	// We import the real embedded asset to simulate what the binary does at runtime.
+	// This verifies the full code path: embedded bytes → Render → .env content.
+	//
+	// The workspace must appear literally as WORKSPACE=my-site.
+	// The password must be base64 (44 chars for 32 random bytes: ceil(32/3)*4 = 44).
+	// REDIS_IMAGE must be present (multi-arch, no suffix).
+	const (
+		workspace = "my-site"
+		wantPass  = 44 // base64(32 bytes) = 44 chars
+	)
+
+	gen := &secrets.CryptoRandGenerator{}
+	tr := newTemplater(gen)
+
+	// Use the real embedded .env.example bytes.
+	// We read the file directly from the assets package's path to avoid coupling
+	// the envgen package to the assets package (no import cycle).
+	assetPath := "../assets/.env.example"
+	template, err := os.ReadFile(assetPath)
+	if err != nil {
+		t.Skipf("embedded asset not readable at %s: %v", assetPath, err)
+	}
+
+	in := envgen.Input{
+		Workspace:        workspace,
+		Arch:             platform.ArchAMD64,
+		GeneratePassword: true,
+		Ports:            envgen.PortsConfig{RedisPort: 6379},
+	}
+
+	out, err := tr.Render(template, in)
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+
+	rendered := string(out)
+
+	// 1. WORKSPACE=my-site appears literally.
+	if !strings.Contains(rendered, "WORKSPACE="+workspace) {
+		t.Errorf("rendered .env missing WORKSPACE=%s\n---\n%s", workspace, rendered)
+	}
+
+	// 2. POSTGRES_PASSWORD is non-empty and 44 chars (base64-encoded 32 bytes).
+	var gotPassword string
+	for _, line := range strings.Split(rendered, "\n") {
+		trimmed := strings.TrimRight(line, "\r")
+		if strings.HasPrefix(trimmed, "POSTGRES_PASSWORD=") {
+			gotPassword = strings.TrimPrefix(trimmed, "POSTGRES_PASSWORD=")
+			break
+		}
+	}
+	if gotPassword == "" {
+		t.Error("POSTGRES_PASSWORD line not found in rendered .env")
+	} else if len(gotPassword) != wantPass {
+		t.Errorf("POSTGRES_PASSWORD length = %d, want %d (base64 of 32 bytes)", len(gotPassword), wantPass)
+	}
+
+	// 3. REDIS_IMAGE is present (multi-arch, no -arm suffix needed).
+	if !strings.Contains(rendered, "REDIS_IMAGE=") {
+		t.Error("rendered .env missing REDIS_IMAGE line")
+	}
+}
+
+// ---------------------------------------------------------------------------
 
 // assertKeyValue checks that the rendered output contains exactly KEY=VALUE on a line.
 func assertKeyValue(t *testing.T, output, key, value string) {
