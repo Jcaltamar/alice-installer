@@ -125,8 +125,8 @@ func TestInstallerAMD64_DryRun(t *testing.T) {
 	output := string(out)
 
 	// Verify preflight report contains OS and Docker check lines.
-	if !strings.Contains(output, "OS") {
-		t.Errorf("dry-run output missing OS check: %s", output)
+	if !strings.Contains(output, "Operating system") {
+		t.Errorf("dry-run output missing Operating system check: %s", output)
 	}
 	if !strings.Contains(output, "Docker") {
 		t.Errorf("dry-run output missing Docker check: %s", output)
