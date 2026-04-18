@@ -93,11 +93,20 @@ ok "Checksum matches ($expected)"
 
 info "Extracting"
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
-[ -x "$tmpdir/$BINARY" ] || fail "Binary missing or not executable after extract"
+
+# Try flat layout first (binary at root), then fall back to
+# wrapped layout (binary inside a single subdirectory).
+if [ -x "$tmpdir/$BINARY" ]; then
+  extracted_bin="$tmpdir/$BINARY"
+else
+  extracted_bin=$(find "$tmpdir" -type f -name "$BINARY" -perm -u+x 2>/dev/null | head -n1)
+fi
+[ -n "${extracted_bin:-}" ] && [ -x "$extracted_bin" ] \
+  || fail "Could not locate $BINARY executable after extract"
 
 info "Installing to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-install -m 0755 "$tmpdir/$BINARY" "$INSTALL_DIR/$BINARY"
+install -m 0755 "$extracted_bin" "$INSTALL_DIR/$BINARY"
 
 ok "Installed $BINARY $VERSION → $INSTALL_DIR/$BINARY"
 

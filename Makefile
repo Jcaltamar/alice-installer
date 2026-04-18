@@ -1,4 +1,4 @@
-.PHONY: test test-short test-integration cover build build-all lint fmt tidy
+.PHONY: test test-short test-integration cover build build-all build-snapshot release-local lint fmt tidy
 
 BINARY      := alice-installer
 BIN_DIR     := bin
@@ -36,6 +36,27 @@ build-all:
 
 build-snapshot:
 	goreleaser build --snapshot --clean
+
+# release-local builds the per-arch tarballs + checksums.txt for manual upload
+# to a GitHub release when the goreleaser CI workflow is unavailable. Pass
+# VERSION=x.y.z; binary is placed at the root of each tarball (goreleaser-default
+# layout) alongside RUNBOOK.md and README.md.
+VERSION ?= 0.0.0-snapshot
+release-local:
+	@rm -rf $(DIST_DIR) && mkdir -p $(DIST_DIR)
+	@for ARCH in amd64 arm64; do \
+	  echo "→ Building linux/$$ARCH"; \
+	  GOOS=linux GOARCH=$$ARCH $(GO_FLAGS) go build -trimpath \
+	    -ldflags="$(LDFLAGS) -X main.version=v$(VERSION)" \
+	    -o $(DIST_DIR)/$(BINARY) $(CMD_PATH) || exit 1; \
+	  cp RUNBOOK.md README.md $(DIST_DIR)/; \
+	  NAME=$(BINARY)_$(VERSION)_linux_$$ARCH; \
+	  tar -czf $(DIST_DIR)/$$NAME.tar.gz -C $(DIST_DIR) $(BINARY) RUNBOOK.md README.md; \
+	  rm $(DIST_DIR)/$(BINARY); \
+	done
+	@rm -f $(DIST_DIR)/RUNBOOK.md $(DIST_DIR)/README.md
+	@cd $(DIST_DIR) && sha256sum $(BINARY)_*.tar.gz > checksums.txt
+	@echo; echo "✓ Release assets ready in $(DIST_DIR)/:"; ls -lh $(DIST_DIR)/
 
 # ── Code quality ─────────────────────────────────────────────────────────────
 
