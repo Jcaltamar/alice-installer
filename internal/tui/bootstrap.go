@@ -217,9 +217,28 @@ func (m BootstrapModel) Init() tea.Cmd {
 func (m BootstrapModel) Update(msg tea.Msg) (BootstrapModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Banner screen: wait for Enter to dismiss and emit BootstrapCompleteMsg.
+		// Banner screen: wait for Enter. If banners were emitted (currently only
+		// by docker_group_add), re-running preflight in the same session is
+		// pointless — group membership doesn't apply to running processes until
+		// the user re-logs in. Exit cleanly with the banner text printed to
+		// scrollback so the instructions survive alt-screen teardown.
 		if m.showingBanner {
 			if msg.Type == tea.KeyEnter {
+				if len(m.banners) > 0 {
+					cmds := []tea.Cmd{
+						tea.Println(""),
+						tea.Println("Bootstrap complete. Action required before continuing:"),
+					}
+					for _, b := range m.banners {
+						cmds = append(cmds, tea.Println("  • "+b))
+					}
+					cmds = append(cmds,
+						tea.Println(""),
+						tea.Println("Once done, re-run `alice-installer`."),
+						tea.Quit,
+					)
+					return m, tea.Sequence(cmds...)
+				}
 				return m, func() tea.Msg { return BootstrapCompleteMsg{} }
 			}
 			return m, nil

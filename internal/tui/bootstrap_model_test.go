@@ -221,8 +221,10 @@ func TestBootstrapModelBannerScreenViewContainsBannerText(t *testing.T) {
 	}
 }
 
-// T-DB-017c: Pressing Enter in banner screen emits BootstrapCompleteMsg.
-func TestBootstrapModelBannerEnterEmitsComplete(t *testing.T) {
+// T-DB-017c: Pressing Enter on the banner screen when banners are present
+// exits the installer cleanly — re-running preflight in the same session
+// would loop because group membership doesn't apply to running processes.
+func TestBootstrapModelBannerEnterExitsCleanly(t *testing.T) {
 	m, _ := buildTestBootstrapWithBanner("Log out and back in.")
 	m.confirming = false
 	m.showingBanner = true
@@ -234,8 +236,11 @@ func TestBootstrapModelBannerEnterEmitsComplete(t *testing.T) {
 		t.Fatal("Enter on banner screen should return a cmd")
 	}
 	msg := cmd()
-	if _, ok := msg.(BootstrapCompleteMsg); !ok {
-		t.Errorf("Enter on banner screen should emit BootstrapCompleteMsg, got %T", msg)
+	// The cmd is tea.Sequence(tea.Println..., tea.Quit). We assert it does
+	// NOT emit BootstrapCompleteMsg — that would trigger a preflight rerun
+	// which is pointless until the user re-logs in.
+	if _, ok := msg.(BootstrapCompleteMsg); ok {
+		t.Errorf("Enter on banner with pending instructions should NOT emit BootstrapCompleteMsg; got %T", msg)
 	}
 }
 

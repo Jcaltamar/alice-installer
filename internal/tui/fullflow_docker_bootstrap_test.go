@@ -321,20 +321,21 @@ func TestFullFlowUserNotInGroupBootstrapsGroupAdd(t *testing.T) {
 		t.Errorf("banner view should prompt for Enter, got:\n%s", bannerView)
 	}
 
-	// Press Enter → BootstrapCompleteMsg.
-	m, cmd = sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	// Press Enter on the banner screen. Because docker_group_add emitted a
+	// banner (the "log out and back in" message), the installer CANNOT rerun
+	// preflight in this session — group membership only applies after re-login.
+	// The new behaviour is to print the banner to scrollback and quit cleanly,
+	// so the user sees the instruction after the TUI exits.
+	_, cmd = sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Enter on banner screen should return cmd")
 	}
-	completeMsg := drainCmd(cmd)
-	if _, ok := completeMsg.(BootstrapCompleteMsg); !ok {
-		t.Fatalf("Enter on banner screen should emit BootstrapCompleteMsg, got %T", completeMsg)
-	}
-
-	// Apply → re-arm preflight.
-	m, _ = sendMsg(m, completeMsg)
-	if m.state != StatePreflight {
-		t.Fatalf("BootstrapCompleteMsg → state = %v, want StatePreflight", m.state)
+	// The cmd is tea.Sequence(tea.Println..., tea.Quit). We don't introspect
+	// the unexported sequenceMsg type; instead we assert that the cmd does NOT
+	// produce a BootstrapCompleteMsg (which would incorrectly rerun preflight).
+	msg := drainCmd(cmd)
+	if _, ok := msg.(BootstrapCompleteMsg); ok {
+		t.Fatalf("Enter on banner with docker_group_add should NOT emit BootstrapCompleteMsg (would loop); got %T", msg)
 	}
 }
 
