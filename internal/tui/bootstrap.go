@@ -102,6 +102,14 @@ func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, confi
 				// Binary present, user in group, no systemd → non-fixable.
 				nonFixable = append(nonFixable, item)
 			}
+		case preflight.CheckDockerVersion, preflight.CheckComposeVersion:
+			// When the docker binary is missing, these checks fail with the
+			// same "executable not found" root cause as CheckDockerDaemon.
+			// The install action queued under CheckDockerDaemon will resolve
+			// all three — don't mark them non-fixable.
+			if env.DockerBinaryPresent {
+				nonFixable = append(nonFixable, item)
+			}
 		case preflight.CheckMediaWritable:
 			dirActions = append(dirActions, buildDirAction(string(preflight.CheckMediaWritable), mediaDir, username))
 		case preflight.CheckConfigWritable:
