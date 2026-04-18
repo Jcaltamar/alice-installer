@@ -68,10 +68,10 @@
 
 ## Phase 5: Preflight Orchestration
 
-- [ ] T-037 — **(RED)** `internal/preflight/coordinator_test.go`: inject all fakes; happy path → all pass; GPU absent → warn not fail; Docker absent → fail (blocks); non-Linux → fail immediately; structured `PreflightReport` shape — *REQ-PF-1..REQ-PF-7*. **Done**: FAIL.
-- [ ] T-038 — **(GREEN)** `internal/preflight/coordinator.go`: `PreflightCoordinator` runs `OSGuard`, `ArchDetector`, `DockerClient`(version+compose), `GPUDetector`, `FilesystemOps`; aggregates into `PreflightReport{Items []CheckResult}` — *REQ-PF-1..REQ-PF-7*. **Done**: T-037 passes.
-- [ ] T-039 — **(RED)** `internal/preflight/report_test.go`: `HasBlockingFailure()` true when any FAIL; false when only WARNs; `CanContinue()` mirrors — *REQ-PF-7*. **Done**: FAIL.
-- [ ] T-040 — **(GREEN)** `internal/preflight/report.go`: `PreflightReport` methods `HasBlockingFailure()`, `CanContinue()`, `Warnings()` — *REQ-PF-7*. **Done**: T-039 passes.
+- [x] T-037 — **(RED)** `internal/preflight/coordinator_test.go`: inject all fakes; happy path → all pass; GPU absent → warn not fail; Docker absent → fail (blocks); non-Linux → fail immediately; structured `PreflightReport` shape — *REQ-PF-1..REQ-PF-7*. **Done**: FAIL.
+- [x] T-038 — **(GREEN)** `internal/preflight/coordinator.go`: `PreflightCoordinator` runs `OSGuard`, `ArchDetector`, `DockerClient`(version+compose), `GPUDetector`, `FilesystemOps`; aggregates into `PreflightReport{Items []CheckResult}` — *REQ-PF-1..REQ-PF-7*. **Done**: T-037 passes.
+- [x] T-039 — **(RED)** `internal/preflight/report_test.go`: `HasBlockingFailure()` true when any FAIL; false when only WARNs; `CanContinue()` mirrors — *REQ-PF-7*. **Done**: FAIL.
+- [x] T-040 — **(GREEN)** `internal/preflight/report.go`: `PreflightReport` methods `HasBlockingFailure()`, `CanContinue()`, `Warnings()` — *REQ-PF-7*. **Done**: T-039 passes.
 
 ---
 

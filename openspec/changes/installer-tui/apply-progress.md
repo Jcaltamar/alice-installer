@@ -1,6 +1,6 @@
 # Apply Progress: installer-tui
 
-**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042), 3 (T-022..T-034 — parallel Phase 3 + Phase 4)
+**Batches completed**: 1 (T-001..T-010), 2 (T-011..T-021 + T-041..T-042), 3 (T-022..T-034 — parallel Phase 3 + Phase 4), 5 (T-037..T-040 — Phase 5 Preflight coordinator)
 **Mode**: Strict TDD
 **Date last updated**: 2026-04-18
 **Status**: 36/84 tasks complete
@@ -186,9 +186,50 @@
 
 ---
 
+---
+
+### Batch 5 — Phase 5: Preflight Coordinator (T-037..T-040)
+
+- [x] T-037 — `internal/preflight/coordinator_test.go` — 9 table-driven scenarios via Fake* injection; happy path, non-Linux OS, unknown arch, Docker down, Compose v1, GPU absent, ports occupied, media dir not writable, Docker version too old
+- [x] T-038 — `internal/preflight/coordinator.go` — `Coordinator` struct + `Run(ctx)` method; OS/Arch blocking short-circuit; `DirectoryChecker` interface + `OSDirChecker` (parent-dir strategy, no side effects); `semverGTE`/`parseSemver`/`minVersion` pure helpers
+- [x] T-039 — `internal/preflight/report_test.go` — 7 `HasBlockingFailure` cases, 4 `CanContinue` cases, Warnings/Failures/Passes filter methods + empty-report edge cases
+- [x] T-040 — `internal/preflight/report.go` — `Status`, `CheckID`, `CheckResult`, `Report` types + methods; `filterByStatus` pure helper; `dirs_test.go` auxiliary (4 OSDirChecker cases with real filesystem + chmod test guarded by `-short`)
+
+### Batch 5 — Files Created
+| File | Action | Description |
+|------|--------|-------------|
+| `internal/preflight/report.go` | Created | Status/CheckID/CheckResult/Report types + HasBlockingFailure/CanContinue/Warnings/Failures/Passes |
+| `internal/preflight/report_test.go` | Created | 7+4 table-driven Report method tests + filter method tests |
+| `internal/preflight/coordinator.go` | Created | DirectoryChecker interface, OSDirChecker (parent-dir strategy), Coordinator struct + Run(), semver helpers |
+| `internal/preflight/coordinator_test.go` | Created | 9 coordinator scenarios with all Fake* injections + local FakeDirChecker |
+| `internal/preflight/dirs_test.go` | Created | 4 OSDirChecker tests using t.TempDir() + chmod guarded by -short |
+
+### Batch 5 — TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| T-039 | `internal/preflight/report_test.go` | Unit | N/A (new) | ✅ Written (no package → build fail) | ✅ 7+4+4+1=16 assertions pass | ✅ 7 HasBlockingFailure cases + 4 CanContinue cases + 3 filter methods | ➖ None needed |
+| T-040 | `internal/preflight/report.go` | — | N/A (new) | — (paired T-039) | ✅ GREEN | — | ➖ None needed |
+| T-037 | `internal/preflight/coordinator_test.go` | Unit | N/A (new) | ✅ Written (Coordinator undefined → build fail) | ✅ 9/9 pass | ✅ 9 scenarios covering all FAIL/WARN paths | ➖ None needed |
+| T-038 | `internal/preflight/coordinator.go` | — | N/A (new) | — (paired T-037) | ✅ GREEN | — | ✅ Removed dead helper fn; confirmed minVersion logic |
+| T-040 dirs | `internal/preflight/dirs_test.go` | Unit | N/A (new) | Written alongside T-040 | ✅ 4/4 pass | ✅ writable, parent-writable, ghost-parent, chmod-readonly | ✅ chmod test guarded by -short + runtime.GOOS |
+
+### Batch 5 — Test Summary
+- **Tests written**: ~25 (16 report + 9 coordinator + 4 dirs_checker)
+- **Tests passing**: all 25 (preflight package passes cleanly)
+- **Cumulative test suites**: 9 packages, all GREEN (`go test -short ./...`)
+- **Pure functions created**: `filterByStatus`, `semverGTE`, `parseSemver`, `minVersion`, `probeDir`
+
+### Batch 5 — Deviations
+1. **`OSDirChecker` parent-dir strategy**: batch instructions say "if dir doesn't exist, check `/opt` writable". Implemented as "check parent of the missing path" (generic, not hardcoded to `/opt`). This is strictly more correct and satisfies the spec.
+2. **`semverGTE` stdlib-only**: no external semver package — simple integer comparison of major.minor.patch components. Pre-release suffixes are stripped. This is sufficient for the "20.10.0" style versions Docker and Compose emit.
+3. **Docker version check uses WARN not FAIL**: batch instructions say "WARN if both ≥ MinDockerVersion fails". Implemented as WARN (not FAIL) for old Docker version, consistent with design (only hard-block-worthy checks are FAIL).
+4. **`FakeDirChecker` placed in `coordinator_test.go`** (not a separate `preflight/fake.go`): the preflight package doesn't need a published fake since `FakeDirChecker` is only needed in tests of the coordinator. The orchestrator prompt said "define locally in test file or fake.go" — chose test file to keep production package lean.
+
+---
+
 ## Remaining Tasks
 
-T-035..T-040 (Phase 5: Preflight coordinator — 4 tasks, T-035/T-036 already absorbed)
 T-043..T-084 (Phases 7-11: TUI states, cmd wiring, integration, distribution, security — 42 tasks)
 
-**~48 tasks remaining**. Next batch: T-037..T-040 (Preflight orchestrator — depends on Phases 2 + 3).
+**~42 tasks remaining**. Next batch: T-043..T-044 (TUI message types) → T-045..T-068 (all TUI states).
