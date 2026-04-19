@@ -34,7 +34,6 @@ func defaultInput() envgen.Input {
 			WebPort:          8080,
 			RTSPPort:         8554,
 			RedisPort:        6379,
-			QueuePort:        3000,
 			HLSPort:          8888,
 			HLSPort2:         8889,
 			HLSPort3:         8890,
@@ -182,7 +181,6 @@ func TestTemplater_Render_ArchSubstitution(t *testing.T) {
 		backend string
 		socket  string
 		web     string
-		queue   string
 	}{
 		{
 			name:    "amd64 uses plain tags",
@@ -190,7 +188,6 @@ func TestTemplater_Render_ArchSubstitution(t *testing.T) {
 			backend: "jcaltamare/aliceguardian:backend",
 			socket:  "jcaltamare/aliceguardian:socket1",
 			web:     "jcaltamare/aliceguardian:web_ag",
-			queue:   "jcaltamare/aliceguardian:queue",
 		},
 		{
 			name:    "arm64 uses -arm suffix",
@@ -198,7 +195,6 @@ func TestTemplater_Render_ArchSubstitution(t *testing.T) {
 			backend: "jcaltamare/aliceguardian:backend-arm",
 			socket:  "jcaltamare/aliceguardian:socket1-arm",
 			web:     "jcaltamare/aliceguardian:web_ag-arm",
-			queue:   "jcaltamare/aliceguardian:queue-arm",
 		},
 	}
 
@@ -216,7 +212,6 @@ func TestTemplater_Render_ArchSubstitution(t *testing.T) {
 			assertKeyValue(t, s, "BACKEND_IMAGE", tt.backend)
 			assertKeyValue(t, s, "WEBSOCKET_IMAGE", tt.socket)
 			assertKeyValue(t, s, "WEB_IMAGE", tt.web)
-			assertKeyValue(t, s, "QUEUE_IMAGE", tt.queue)
 
 			// Redis is multi-arch — always the same
 			assertKeyValue(t, s, "REDIS_IMAGE", "redis:7-alpine")
@@ -329,7 +324,6 @@ func TestTemplater_Render_PortSubstitution(t *testing.T) {
 		WebPort:          18080,
 		RTSPPort:         18554,
 		RedisPort:        16379,
-		QueuePort:        13000,
 		HLSPort:          18888,
 		HLSPort2:         18889,
 		HLSPort3:         18890,
@@ -351,7 +345,6 @@ func TestTemplater_Render_PortSubstitution(t *testing.T) {
 	assertKeyValue(t, s, "WEB_PORT", "18080")
 	assertKeyValue(t, s, "RTSP_PORT", "18554")
 	assertKeyValue(t, s, "REDIS_PORT", "16379")
-	assertKeyValue(t, s, "QUEUE_PORT", "13000")
 	assertKeyValue(t, s, "HLS_PORT", "18888")
 	assertKeyValue(t, s, "HLS_PORT2", "18889")
 	assertKeyValue(t, s, "HLS_PORT3", "18890")

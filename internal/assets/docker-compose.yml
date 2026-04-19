@@ -113,42 +113,6 @@ services:
         source: /opt/alice-media
         target: /opt/alice-media
 
-  queue:
-    image: ${QUEUE_IMAGE}
-    container_name: alice_queue
-    network_mode: host
-    environment:
-      - HOST_REDIS=${REDIS_HOST}
-      - HOST_POSTGRES=${POSTGRES_HOST}
-      - HOST_WEBSOCKET=${WEBSOCKET_HOST}
-      - HOST_BACKEND=${BACKEND_HOST}
-      - HOST_QUEUE=localhost
-      # PostgreSQL connection variables
-      - POSTGRES_HOST=${POSTGRES_HOST}
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DATABASE=${POSTGRES_DATABASE}
-      - POSTGRES_SSL=${POSTGRES_SSL}
-      - POSTGRES_SSL_REJECT_UNAUTHORIZED=${POSTGRES_SSL_REJECT_UNAUTHORIZED}
-      # Queue specific variables
-      - NODE_ENV=${NODE_ENV}
-      - QUEUE_PORT=${QUEUE_PORT}
-    volumes:
-      - /opt/alice-media:/opt/alice-media
-      - /opt/alice-config:/opt/alice-config
-      - alice-guardian:/opt/alice-guardian
-    depends_on:
-      postgresql-master:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: always
-
   redis:
     image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: alice_redis

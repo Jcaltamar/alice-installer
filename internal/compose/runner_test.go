@@ -324,7 +324,7 @@ func TestFakeComposeRunner_UpSendsProgressAndReturnsErr(t *testing.T) {
 func TestFakeComposeRunner_HealthStatusReturnsConfigured(t *testing.T) {
 	want := []compose.ServiceHealth{
 		{Service: "backend", Status: "healthy"},
-		{Service: "queue", Status: "unhealthy"},
+		{Service: "websocket", Status: "unhealthy"},
 	}
 	fake := &compose.FakeComposeRunner{Healths: want}
 

@@ -18,7 +18,6 @@ type PortsConfig struct {
 	WebPort          int
 	RTSPPort         int
 	RedisPort        int
-	QueuePort        int
 	HLSPort          int
 	HLSPort2         int
 	HLSPort3         int
@@ -102,7 +101,6 @@ func imageTags(arch platform.Arch) map[string]string {
 		"BACKEND_IMAGE":   "jcaltamare/aliceguardian:backend" + suffix,
 		"WEBSOCKET_IMAGE": "jcaltamare/aliceguardian:socket1" + suffix,
 		"WEB_IMAGE":       "jcaltamare/aliceguardian:web_ag" + suffix,
-		"QUEUE_IMAGE":     "jcaltamare/aliceguardian:queue" + suffix,
 		"REDIS_IMAGE":     "redis:7-alpine", // multi-arch manifest, no suffix
 	}
 }
@@ -141,7 +139,6 @@ func (t *Templater) Render(template []byte, in Input) ([]byte, error) {
 	subs["WEB_PORT"] = fmt.Sprintf("%d", p.WebPort)
 	subs["RTSP_PORT"] = fmt.Sprintf("%d", p.RTSPPort)
 	subs["REDIS_PORT"] = fmt.Sprintf("%d", p.RedisPort)
-	subs["QUEUE_PORT"] = fmt.Sprintf("%d", p.QueuePort)
 	subs["HLS_PORT"] = fmt.Sprintf("%d", p.HLSPort)
 	subs["HLS_PORT2"] = fmt.Sprintf("%d", p.HLSPort2)
 	subs["HLS_PORT3"] = fmt.Sprintf("%d", p.HLSPort3)

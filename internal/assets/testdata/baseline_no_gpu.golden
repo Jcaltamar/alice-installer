@@ -100,55 +100,6 @@ services:
         source: postgresql_master_data1
         target: /var/lib/postgresql/data
         volume: {}
-  queue:
-    container_name: alice_queue
-    depends_on:
-      postgresql-master:
-        condition: service_healthy
-        required: true
-    environment:
-      HOST_BACKEND: 127.0.0.1
-      HOST_POSTGRES: 127.0.0.1
-      HOST_QUEUE: localhost
-      HOST_REDIS: 127.0.0.1
-      HOST_WEBSOCKET: 127.0.0.1
-      NODE_ENV: production
-      POSTGRES_DATABASE: alice_guardian
-      POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PASSWORD: test-password
-      POSTGRES_PORT: "5432"
-      POSTGRES_SSL: "false"
-      POSTGRES_SSL_REJECT_UNAUTHORIZED: "false"
-      POSTGRES_USER: postgres
-      QUEUE_PORT: "3000"
-    healthcheck:
-      test:
-        - CMD
-        - curl
-        - -f
-        - http://localhost:3000/
-      timeout: 10s
-      interval: 30s
-      retries: 3
-      start_period: 40s
-    image: jcaltamare/aliceguardian:queue
-    network_mode: host
-    restart: always
-    volumes:
-      - type: bind
-        source: /opt/alice-media
-        target: /opt/alice-media
-        bind:
-          create_host_path: true
-      - type: bind
-        source: /opt/alice-config
-        target: /opt/alice-config
-        bind:
-          create_host_path: true
-      - type: volume
-        source: alice-guardian
-        target: /opt/alice-guardian
-        volume: {}
   redis:
     command:
       - redis-server

@@ -36,7 +36,7 @@ func TestDeployModelFeedsProgressMessages(t *testing.T) {
 		UpProgressMsgs: []compose.UpProgressMsg{
 			{Service: "backend", Status: "Starting"},
 			{Service: "web", Status: "Started"},
-			{Service: "queue", Status: "Started"},
+			{Service: "websocket", Status: "Started"},
 		},
 	}
 	m := buildDeployModel(runner)

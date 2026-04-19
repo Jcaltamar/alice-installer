@@ -61,7 +61,6 @@ func fullEnv() map[string]string {
 		"BACKEND_IMAGE":                    "jcaltamare/aliceguardian:backend",
 		"WEBSOCKET_IMAGE":                  "jcaltamare/aliceguardian:socket1",
 		"WEB_IMAGE":                        "jcaltamare/aliceguardian:web_ag",
-		"QUEUE_IMAGE":                      "jcaltamare/aliceguardian:queue",
 		"REDIS_IMAGE":                      "redis:7-alpine",
 		"REDIS_PORT":                       "6379",
 		"POSTGRES_HOST":                    "127.0.0.1",
@@ -72,7 +71,6 @@ func fullEnv() map[string]string {
 		"POSTGRES_SSL":                     "false",
 		"POSTGRES_SSL_REJECT_UNAUTHORIZED": "false",
 		"NODE_ENV":                         "production",
-		"QUEUE_PORT":                       "3000",
 		"REDIS_HOST":                       "127.0.0.1",
 		"WEBSOCKET_HOST":                   "127.0.0.1",
 		"BACKEND_HOST":                     "127.0.0.1",
@@ -145,7 +143,6 @@ func TestComposeRender(t *testing.T) {
 				// resolved image values from fullEnv()
 				"jcaltamare/aliceguardian:backend",  // BACKEND_IMAGE resolved (no -arm suffix)
 				"jcaltamare/aliceguardian:socket1",  // WEBSOCKET_IMAGE resolved (no -arm suffix)
-				"jcaltamare/aliceguardian:queue",    // QUEUE_IMAGE resolved (no -arm suffix)
 				"alice_redis",                        // redis service present
 				"redis:7-alpine",                    // redis image resolved
 			},
@@ -154,7 +151,6 @@ func TestComposeRender(t *testing.T) {
 				"pi4aK2uBQa",                          // hardcoded leaked password fragment
 				"jcaltamare/aliceguardian:backend-arm", // old hardcoded image tag
 				"jcaltamare/aliceguardian:socket1-arm", // old hardcoded image tag
-				"jcaltamare/aliceguardian:queue-arm",   // old hardcoded image tag
 				"runtime: nvidia",                       // GPU-only — must be absent from baseline
 			},
 			wantExitZero: true,

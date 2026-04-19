@@ -36,7 +36,7 @@ func TestPullModelFeedsProgressMessages(t *testing.T) {
 		PullProgressMsgs: []compose.PullProgressMsg{
 			{Service: "backend", Status: "Pulling"},
 			{Service: "web", Status: "Pulling"},
-			{Service: "queue", Status: "Pulled"},
+			{Service: "websocket", Status: "Pulled"},
 		},
 	}
 	m := buildPullModel(runner)
@@ -51,8 +51,8 @@ func TestPullModelFeedsProgressMessages(t *testing.T) {
 	if len(m.services) != 3 {
 		t.Errorf("services map len = %d, want 3", len(m.services))
 	}
-	if m.services["queue"] != "Pulled" {
-		t.Errorf("services[queue] = %q, want Pulled", m.services["queue"])
+	if m.services["websocket"] != "Pulled" {
+		t.Errorf("services[websocket] = %q, want Pulled", m.services["websocket"])
 	}
 }
 
