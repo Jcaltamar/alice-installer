@@ -67,6 +67,25 @@ internal/
 openspec/            SDD planning artifacts
 ```
 
+### End-to-end tests
+
+The E2E harness boots a real Ubuntu 22.04 container with systemd as PID 1 (no Docker pre-installed) and runs `alice-installer --unattended` inside it. The installer's bootstrap downloads and configures Docker from scratch, which is exactly what happens on a fresh production machine.
+
+**Requirements:** a working local Docker daemon and ~500 MB of free disk (basic mode).
+
+```sh
+make e2e                   # basic mode — stops before pull + up
+FULL_DEPLOY=1 make e2e     # full mode — pulls images (~3 GB) and brings services up
+```
+
+The basic mode validates:
+- Docker is installed and the `docker compose` plugin works
+- `testuser` is added to the `docker` group
+- `/opt/alice-media` and `/opt/alice-config` are created and writable
+- `.env` and both compose files are written to the workspace directory
+
+`FULL_DEPLOY=1` additionally pulls all images and asserts that redis and postgres containers come up healthy.
+
 ## Release process
 
 Tag a release on `main` to trigger the goreleaser workflow:

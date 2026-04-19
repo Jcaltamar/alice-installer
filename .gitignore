@@ -34,3 +34,4 @@ vendor/
 # Orchestrator / agent state (local only)
 .atl/
 alice-installer
+.claude/

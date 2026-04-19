@@ -1,0 +1,14 @@
+[1;38;2;34;211;238mPreflight Checks[0m
+
+  [38;2;34;197;94m●[0m  Operating system
+       [38;2;100;116;139mlinux[0m
+  [38;2;34;197;94m●[0m  CPU architecture
+       [38;2;100;116;139mamd64[0m
+  [38;2;239;68;68m●[0m  Docker daemon unreachable
+       [38;2;100;116;139mcontext deadline exceeded[0m
+  [38;2;239;68;68m●[0m  Directory writable: /opt/alice-media
+       [38;2;100;116;139mpermission denied[0m
+  [38;2;239;68;68m●[0m  Directory writable: /opt/alice-config
+       [38;2;100;116;139mpermission denied[0m
+
+[1;38;2;239;68;68m✗  Blocking issues found. Resolve the errors above and re-run the installer.[0m

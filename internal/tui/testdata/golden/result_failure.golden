@@ -1,0 +1,13 @@
+[1;38;2;239;68;68m╔══════════════════════════════════════╗[0m
+[1;38;2;239;68;68m║   Installation failed  ✗             ║[0m
+[1;38;2;239;68;68m╚══════════════════════════════════════╝[0m
+
+[38;2;241;245;249m  Stage: pull[0m
+[38;2;239;68;68m  Error: manifest unknown: manifest unknown[0m
+
+[38;2;241;245;249m  Remediation:[0m
+[38;2;100;116;139m    1. Check logs:         docker compose logs -f[0m
+[38;2;100;116;139m    2. Clean up:           docker compose down[0m
+[38;2;100;116;139m    3. Re-run installer to try again.[0m
+
+[38;2;100;116;139m  Press Enter or q to exit.[0m

@@ -7,137 +7,50 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
 	"github.com/jcaltamar/alice-installer/internal/theme"
 )
 
 // ---------------------------------------------------------------------------
-// Action ID constants
+// Re-exports from bootstrap package (keep TUI callers unchanged)
 // ---------------------------------------------------------------------------
 
+// Action is an alias for bootstrap.Action so that TUI-internal code compiles
+// without changes.
+type Action = bootstrap.Action
+
+// BootstrapEnv is an alias for bootstrap.BootstrapEnv.
+type BootstrapEnv = bootstrap.BootstrapEnv
+
+// Action ID constants — re-exported for backward compatibility with tests.
 const (
-	ActionIDDockerInstall = "docker_install"
-	ActionIDSystemdStart  = "systemd_start_docker"
-	ActionIDDockerGroup   = "docker_group_add"
+	ActionIDDockerInstall = bootstrap.ActionIDDockerInstall
+	ActionIDSystemdStart  = bootstrap.ActionIDSystemdStart
+	ActionIDDockerGroup   = bootstrap.ActionIDDockerGroup
 )
 
-// ---------------------------------------------------------------------------
-// Action constructors
-// ---------------------------------------------------------------------------
-
-// dockerInstallAction returns the Action that installs Docker via get.docker.com.
-func dockerInstallAction() Action {
-	return Action{
-		ID:          ActionIDDockerInstall,
-		Description: "Install Docker engine via get.docker.com",
-		Command:     "sudo",
-		Args:        []string{"sh", "-c", "curl -fsSL https://get.docker.com | sh"},
-	}
+// ClassifyBlockers delegates to bootstrap.ClassifyBlockers.
+// Signature is identical; all call-sites in model.go and tests continue to work.
+func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, configDir, workspaceDir string) (fixable []Action, nonFixable []preflight.CheckResult) {
+	return bootstrap.ClassifyBlockers(report, env, mediaDir, configDir, workspaceDir)
 }
 
-// systemdStartDockerAction returns the Action that enables and starts the Docker daemon via systemd.
-func systemdStartDockerAction() Action {
-	return Action{
-		ID:          ActionIDSystemdStart,
-		Description: "Enable and start Docker daemon (systemctl enable --now docker)",
-		Command:     "sudo",
-		Args:        []string{"systemctl", "enable", "--now", "docker"},
-	}
-}
-
-// dockerGroupAddAction returns the Action that adds username to the docker group.
-// It includes a mandatory PostActionBanner instructing the user to re-login.
-func dockerGroupAddAction(username string) Action {
-	return Action{
-		ID:               ActionIDDockerGroup,
-		Description:      fmt.Sprintf("Add %s to the 'docker' group", username),
-		Command:          "sudo",
-		Args:             []string{"usermod", "-aG", "docker", username},
-		PostActionBanner: "Log out and back in (or run `newgrp docker`) for the new group membership to take effect.",
-	}
+// DetectEnv delegates to bootstrap.DetectEnv.
+func DetectEnv() BootstrapEnv {
+	return bootstrap.DetectEnv()
 }
 
 // ---------------------------------------------------------------------------
-// Classification
+// Package-level action constructors (unexported thin wrappers)
+// These exist so that tui-internal tests can call them without importing bootstrap.
 // ---------------------------------------------------------------------------
 
-// ClassifyBlockers splits failing items in report into fixable and non-fixable sets.
-// env provides host environment information used to decide which Docker actions to offer.
-// Actions are returned in priority order:
-//
-//	1. docker_install (if Docker binary is missing)
-//	2. dir-creation actions (media, config)
-//	3. systemd_start_docker (if Docker present, user in group, systemd available)
-//	4. docker_group_add (if Docker present but user not in docker group)
-func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, configDir string) (fixable []Action, nonFixable []preflight.CheckResult) {
-	username := env.UserName
-	if username == "" {
-		username = "$USER"
-	}
-
-	// Buckets for priority ordering.
-	var dockerInstall []Action // priority 1
-	var dirActions []Action    // priority 2
-	var systemdActions []Action // priority 3
-	var groupActions []Action  // priority 4
-
-	for _, item := range report.Items {
-		if item.Status != preflight.StatusFail {
-			continue
-		}
-		switch item.ID {
-		case preflight.CheckDockerDaemon:
-			switch {
-			case !env.DockerBinaryPresent:
-				// Docker not installed at all → install it.
-				dockerInstall = append(dockerInstall, dockerInstallAction())
-			case !env.UserInDockerGroup:
-				// Binary present but user not in docker group → add to group.
-				// The daemon might be running fine once group is right.
-				groupActions = append(groupActions, dockerGroupAddAction(username))
-			case env.SystemdPresent:
-				// Binary present, user in group, systemd available → start daemon.
-				systemdActions = append(systemdActions, systemdStartDockerAction())
-			default:
-				// Binary present, user in group, no systemd → non-fixable.
-				nonFixable = append(nonFixable, item)
-			}
-		case preflight.CheckDockerVersion, preflight.CheckComposeVersion:
-			// When the docker binary is missing, these checks fail with the
-			// same "executable not found" root cause as CheckDockerDaemon.
-			// The install action queued under CheckDockerDaemon will resolve
-			// all three — don't mark them non-fixable.
-			if env.DockerBinaryPresent {
-				nonFixable = append(nonFixable, item)
-			}
-		case preflight.CheckMediaWritable:
-			dirActions = append(dirActions, buildDirAction(string(preflight.CheckMediaWritable), mediaDir, username))
-		case preflight.CheckConfigWritable:
-			dirActions = append(dirActions, buildDirAction(string(preflight.CheckConfigWritable), configDir, username))
-		default:
-			nonFixable = append(nonFixable, item)
-		}
-	}
-
-	// Assemble in priority order.
-	fixable = append(fixable, dockerInstall...)
-	fixable = append(fixable, dirActions...)
-	fixable = append(fixable, systemdActions...)
-	fixable = append(fixable, groupActions...)
-
-	return fixable, nonFixable
-}
-
-// buildDirAction constructs the Action that creates dir and grants ownership.
-func buildDirAction(id, dir, username string) Action {
-	script := fmt.Sprintf("mkdir -p %s && chown -R %s:%s %s", dir, username, username, dir)
-	return Action{
-		ID:          id,
-		Description: fmt.Sprintf("Create %s and grant ownership to %s", dir, username),
-		Command:     "sudo",
-		Args:        []string{"sh", "-c", script},
-	}
-}
+func dockerInstallAction() Action     { return bootstrap.DockerInstallAction() }
+func systemdStartDockerAction() Action { return bootstrap.SystemdStartDockerAction() }
+func dockerGroupAddAction(username string) Action { return bootstrap.DockerGroupAddAction(username) }
+func buildDirAction(id, dir, username string) Action { return bootstrap.BuildDirAction(id, dir, username) }
+func buildUserDirAction(id, dir string) Action { return bootstrap.BuildUserDirAction(id, dir) }
 
 // ---------------------------------------------------------------------------
 // Executor interface
@@ -159,7 +72,6 @@ func NewExecutor() Executor { return teaExecutor{} }
 // ExecCmd wraps tea.ExecProcess so the program releases the alt-screen while
 // sudo is running.
 func (teaExecutor) ExecCmd(a Action) tea.Cmd {
-	// Import exec lazily via os/exec at call time.
 	return execProcessCmd(a)
 }
 

@@ -1,0 +1,15 @@
+[1;38;2;34;197;94m╔══════════════════════════════════════╗[0m
+[1;38;2;34;197;94m║   Installation complete  ✓           ║[0m
+[1;38;2;34;197;94m╚══════════════════════════════════════╝[0m
+
+[38;2;241;245;249m  .env written to: /tmp/golden-ws/.env[0m
+
+[38;2;241;245;249m  Services:[0m
+[38;2;34;197;94m    ✓  backend[0m
+[38;2;34;197;94m    ✓  web[0m
+
+[38;2;241;245;249m  Next steps:[0m
+[38;2;100;116;139m    • View logs:   docker compose logs -f[0m
+[38;2;100;116;139m    • Stop stack:  docker compose down[0m
+
+[38;2;100;116;139m  Press Enter or q to exit.[0m

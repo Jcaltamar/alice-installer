@@ -14,15 +14,16 @@ const (
 type CheckID string
 
 const (
-	CheckOS             CheckID = "os"
-	CheckArch           CheckID = "arch"
-	CheckDockerDaemon   CheckID = "docker_daemon"
-	CheckDockerVersion  CheckID = "docker_version"
-	CheckComposeVersion CheckID = "compose_version"
-	CheckGPU            CheckID = "gpu"
-	CheckMediaWritable  CheckID = "media_writable"
-	CheckConfigWritable CheckID = "config_writable"
-	CheckPortsAvailable CheckID = "ports_available"
+	CheckOS                CheckID = "os"
+	CheckArch              CheckID = "arch"
+	CheckDockerDaemon      CheckID = "docker_daemon"
+	CheckDockerVersion     CheckID = "docker_version"
+	CheckComposeVersion    CheckID = "compose_version"
+	CheckGPU               CheckID = "gpu"
+	CheckMediaWritable     CheckID = "media_writable"
+	CheckConfigWritable    CheckID = "config_writable"
+	CheckWorkspaceWritable CheckID = "workspace_writable"
+	CheckPortsAvailable    CheckID = "ports_available"
 )
 
 // CheckResult holds the outcome of one preflight check.

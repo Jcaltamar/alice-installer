@@ -1,4 +1,4 @@
-.PHONY: test test-short test-integration cover build build-all build-snapshot release-local lint fmt tidy prescale-logo
+.PHONY: test test-short test-integration cover build build-all build-snapshot release-local lint fmt tidy prescale-logo e2e
 
 BINARY      := alice-installer
 BIN_DIR     := bin
@@ -69,6 +69,14 @@ fmt:
 
 tidy:
 	go mod tidy
+
+# ── E2E ──────────────────────────────────────────────────────────────────
+
+# e2e runs the full end-to-end test harness inside a systemd Ubuntu container.
+# Requires a working local Docker daemon and ~500 MB of disk (basic mode).
+# Set FULL_DEPLOY=1 to also pull images and bring services up (~3 GB).
+e2e:
+	./scripts/e2e/run.sh
 
 # ── Assets ───────────────────────────────────────────────────────────────────
 

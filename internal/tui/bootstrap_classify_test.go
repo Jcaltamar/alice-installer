@@ -115,7 +115,7 @@ func TestClassifyBlockers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			report := preflight.Report{Items: tt.items}
-			fixable, nonFixable := ClassifyBlockers(report, tt.env, mediaDir, configDir)
+			fixable, nonFixable := ClassifyBlockers(report, tt.env, mediaDir, configDir, "")
 
 			if len(fixable) != tt.wantFixable {
 				t.Errorf("fixable = %d, want %d", len(fixable), tt.wantFixable)
@@ -134,7 +134,7 @@ func TestClassifyBlockersActionsHaveCorrectCommand(t *testing.T) {
 			{ID: preflight.CheckConfigWritable, Status: preflight.StatusFail, Title: "Config"},
 		},
 	}
-	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/opt/alice-media", "/opt/alice-config")
+	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/opt/alice-media", "/opt/alice-config", "")
 	for _, a := range fixable {
 		if a.Command != "sudo" {
 			t.Errorf("action %q Command = %q, want sudo", a.ID, a.Command)
@@ -155,7 +155,7 @@ func TestClassifyBlockersActionsIDsMatchCheckIDs(t *testing.T) {
 			{ID: preflight.CheckConfigWritable, Status: preflight.StatusFail},
 		},
 	}
-	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/m", "/c", "")
 	ids := make(map[string]bool)
 	for _, a := range fixable {
 		ids[a.ID] = true
@@ -179,7 +179,7 @@ func TestClassifyBlockersDockerMissingEmitsDockerInstall(t *testing.T) {
 		},
 	}
 	env := noDockerEnv()
-	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 1 {
 		t.Fatalf("fixable count = %d, want 1", len(fixable))
@@ -200,7 +200,7 @@ func TestClassifyBlockersDockerMissingActionIsFirst(t *testing.T) {
 		},
 	}
 	env := noDockerEnv()
-	fixable, _ := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) == 0 {
 		t.Fatal("expected at least 1 fixable action")
@@ -217,7 +217,7 @@ func TestClassifyBlockersDockerPresentNoBinaryCheck(t *testing.T) {
 			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusPass, Title: "Docker"},
 		},
 	}
-	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, healthyEnv(), "/m", "/c", "")
 	for _, a := range fixable {
 		if a.ID == ActionIDDockerInstall {
 			t.Error("docker_install should NOT be emitted when CheckDockerDaemon passes")
@@ -241,7 +241,7 @@ func TestClassifyBlockersUserNotInGroupEmitsGroupAdd(t *testing.T) {
 		UserInDockerGroup:   false,
 		SystemdPresent:      true,
 	}
-	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 1 {
 		t.Fatalf("fixable count = %d, want 1", len(fixable))
@@ -266,7 +266,7 @@ func TestClassifyBlockersGroupAddHasPostActionBanner(t *testing.T) {
 		UserInDockerGroup:   false,
 		SystemdPresent:      false,
 	}
-	fixable, _ := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) == 0 {
 		t.Fatal("expected docker_group_add action")
@@ -287,7 +287,7 @@ func TestClassifyBlockersGroupAddUsesEnvUsername(t *testing.T) {
 		DockerBinaryPresent: true,
 		UserInDockerGroup:   false,
 	}
-	fixable, _ := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) == 0 {
 		t.Fatal("expected at least one fixable action")
@@ -326,7 +326,7 @@ func TestClassifyBlockersSystemctlCaseEmitsSystemdStart(t *testing.T) {
 		UserInDockerGroup:   true,
 		SystemdPresent:      true,
 	}
-	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 1 {
 		t.Fatalf("fixable count = %d, want 1", len(fixable))
@@ -355,7 +355,7 @@ func TestClassifyBlockersNonSystemdStuckIsNonFixable(t *testing.T) {
 		UserInDockerGroup:   true,
 		SystemdPresent:      false, // no systemd
 	}
-	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, nonFixable := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 0 {
 		t.Errorf("fixable count = %d, want 0 for non-systemd stuck", len(fixable))
@@ -382,7 +382,7 @@ func TestClassifyBlockersActionOrdering(t *testing.T) {
 		},
 	}
 	env := noDockerEnv()
-	fixable, _ := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 3 {
 		t.Fatalf("fixable count = %d, want 3", len(fixable))
@@ -411,7 +411,7 @@ func TestClassifyBlockersActionOrderingGroupAddLast(t *testing.T) {
 		DockerBinaryPresent: true,
 		UserInDockerGroup:   false,
 	}
-	fixable, _ := ClassifyBlockers(report, env, "/m", "/c")
+	fixable, _ := ClassifyBlockers(report, env, "/m", "/c", "")
 
 	if len(fixable) != 2 {
 		t.Fatalf("fixable count = %d, want 2", len(fixable))

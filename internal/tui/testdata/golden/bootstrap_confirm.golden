@@ -1,0 +1,12 @@
+[1;38;2;34;211;238mBootstrap — elevated setup[0m
+
+[38;2;100;116;139mThe following commands require sudo to set up required directories:[0m
+
+[38;2;241;245;249m  1. Install Docker engine via get.docker.com[0m
+[38;2;100;116;139m     $ sudo sh -c curl -fsSL https://get.docker.com | sh[0m
+[38;2;241;245;249m  2. Create /opt/alice-media and grant ownership to ubuntu[0m
+[38;2;100;116;139m     $ sudo sh -c mkdir -p /opt/alice-media && chown -R ubuntu:ubuntu /opt/alice-media[0m
+[38;2;241;245;249m  3. Create /opt/alice-config and grant ownership to ubuntu[0m
+[38;2;100;116;139m     $ sudo sh -c mkdir -p /opt/alice-config && chown -R ubuntu:ubuntu /opt/alice-config[0m
+
+[38;2;245;158;11mPress Y or Enter to execute, N or Esc to skip[0m

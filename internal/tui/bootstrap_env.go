@@ -6,17 +6,13 @@ import (
 	"os/user"
 )
 
-// BootstrapEnv captures the host environment state relevant to Docker bootstrap decisions.
-// All fields are computed once at startup via DetectEnv().
-type BootstrapEnv struct {
-	UserName            string // current OS username; fallback $USER; fallback "$USER" literal
-	DockerBinaryPresent bool   // true when exec.LookPath("docker") succeeds
-	UserInDockerGroup   bool   // true when current user's GIDs include the "docker" group GID
-	SystemdPresent      bool   // true when systemctl is in PATH AND /run/systemd/system exists
-}
-
 // envDetector holds injectable function dependencies for environment detection.
 // The production path uses real stdlib; tests inject fakes.
+//
+// Note: BootstrapEnv and DetectEnv are now re-exported from bootstrap.go,
+// which delegates to internal/bootstrap. This type stays here exclusively so
+// that bootstrap_env_test.go can construct test doubles without importing
+// the bootstrap package directly.
 type envDetector struct {
 	// LookPathFn checks whether a binary name is available in PATH.
 	LookPathFn func(name string) (string, error)
@@ -25,7 +21,6 @@ type envDetector struct {
 	StatFn func(path string) (os.FileInfo, error)
 
 	// CurrentUserFn returns the current OS user's username and group IDs.
-	// Returns (username string, gids []string, err error).
 	CurrentUserFn func() (username string, gids []string, err error)
 
 	// LookupGroupFn returns the GID string for a group name.
@@ -33,7 +28,7 @@ type envDetector struct {
 }
 
 // productionDetector returns an envDetector wired to real stdlib functions.
-func productionDetector() envDetector {
+func productionDetectorLocal() envDetector {
 	return envDetector{
 		LookPathFn: exec.LookPath,
 		StatFn:     os.Stat,
@@ -81,7 +76,6 @@ func (d envDetector) detect() BootstrapEnv {
 	}
 
 	// --- UserInDockerGroup ---
-	// Only attempt if we have valid user info (no error and gids available).
 	if userErr == nil && len(gids) > 0 {
 		dockerGID, groupErr := d.LookupGroupFn("docker")
 		if groupErr == nil && dockerGID != "" {
@@ -102,10 +96,4 @@ func (d envDetector) detect() BootstrapEnv {
 	}
 
 	return env
-}
-
-// DetectEnv returns a BootstrapEnv populated from the real host environment.
-// Safe to call at startup; never panics (all failures result in conservative false values).
-func DetectEnv() BootstrapEnv {
-	return productionDetector().detect()
 }

@@ -65,6 +65,7 @@ type Dependencies struct {
 	// Runtime config
 	MediaDir         string
 	ConfigDir        string
+	WorkspaceDir     string // default: ~/.config/alice-guardian — user-editable artifacts
 	RequiredTCPPorts map[string]int // env-key → default port
 	RequiredUDPPorts map[string]int // env-key → default UDP port
 }
@@ -113,7 +114,6 @@ func portsConfigFromMap(ports map[string]int) envgen.PortsConfig {
 		WebPort:          ports["WEB_PORT"],
 		RTSPPort:         ports["RTSP_PORT"],
 		RedisPort:        ports["REDIS_PORT"],
-		QueuePort:        ports["QUEUE_PORT"],
 		HLSPort:          ports["HLS_PORT"],
 		HLSPort2:         ports["HLS_PORT2"],
 		HLSPort3:         ports["HLS_PORT3"],
@@ -189,7 +189,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PreflightResultMsg:
 		// Classify blockers: if all are fixable → bootstrap; any non-fixable → stay preflight.
-		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.Env, m.deps.MediaDir, m.deps.ConfigDir)
+		fixable, nonFixable := ClassifyBlockers(msg.Report, m.deps.Env, m.deps.MediaDir, m.deps.ConfigDir, m.deps.WorkspaceDir)
 		// Filter out actions we've already attempted this session. An action
 		// that was executed, returned success, but didn't actually fix the
 		// root cause (common: systemctl enable returned 0 but the daemon
@@ -260,7 +260,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Ports:            portsConfigFromMap(m.confirmedPorts),
 			GeneratePassword: true,
 		}
-		envTarget := filepath.Join(m.deps.MediaDir, ".env")
+		workspaceDir := m.deps.WorkspaceDir
+		if workspaceDir == "" {
+			workspaceDir = m.deps.MediaDir // fallback for tests that don't set WorkspaceDir
+		}
+		envTarget := filepath.Join(workspaceDir, ".env")
 		m.envwrite = NewEnvWriteModel(
 			m.deps.Theme,
 			m.deps.Envgen,
@@ -274,10 +278,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EnvWrittenMsg:
 		m.envPath = msg.Path
 		// Compute compose files for pull/deploy/verify.
+		workspaceDir := m.deps.WorkspaceDir
+		if workspaceDir == "" {
+			workspaceDir = m.deps.MediaDir // fallback for tests that don't set WorkspaceDir
+		}
 		m.composeFiles = compose.ComposeFiles(
 			m.gpuDetected,
-			filepath.Join(m.deps.MediaDir, "docker-compose.yml"),
-			filepath.Join(m.deps.MediaDir, "docker-compose.gpu.yml"),
+			filepath.Join(workspaceDir, "docker-compose.yml"),
+			filepath.Join(workspaceDir, "docker-compose.gpu.yml"),
 		)
 		m.state = StatePull
 		m.pull = NewPullModel(m.deps.Theme, m.deps.Compose, m.composeFiles, m.envPath)

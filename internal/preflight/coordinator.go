@@ -84,6 +84,7 @@ type Coordinator struct {
 	Dirs             DirectoryChecker
 	MediaDir         string
 	ConfigDir        string
+	WorkspaceDir     string
 	RequiredTCPPorts []int
 	RequiredUDPPorts []int
 	MinDockerVersion  string
@@ -125,6 +126,9 @@ func (c Coordinator) Run(ctx context.Context) Report {
 	// 7. Directory writability.
 	items = append(items, c.checkDir(CheckMediaWritable, c.MediaDir))
 	items = append(items, c.checkDir(CheckConfigWritable, c.ConfigDir))
+	if c.WorkspaceDir != "" {
+		items = append(items, c.checkDir(CheckWorkspaceWritable, c.WorkspaceDir))
+	}
 
 	// 8. Ports.
 	items = append(items, c.checkPorts(ctx))
