@@ -88,14 +88,19 @@ type FakeCmdOutput struct {
 }
 
 // FakeCommandRunner is a test double for the CommandRunner interface.
-// Keyed by command name (first arg to Run).
+// Keyed by command name (first arg to Run). LastName/LastArgs capture the
+// most recent invocation so tests can assert on full command line.
 type FakeCommandRunner struct {
-	Outputs map[string]FakeCmdOutput
+	Outputs  map[string]FakeCmdOutput
+	LastName string
+	LastArgs []string
 }
 
 // Run returns the pre-configured output for the given command name.
 // If no entry exists, it returns nil/nil/nil.
-func (f *FakeCommandRunner) Run(_ context.Context, name string, _ ...string) ([]byte, []byte, error) {
+func (f *FakeCommandRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	f.LastName = name
+	f.LastArgs = append([]string(nil), args...)
 	if f.Outputs == nil {
 		return nil, nil, nil
 	}
@@ -106,19 +111,27 @@ func (f *FakeCommandRunner) Run(_ context.Context, name string, _ ...string) ([]
 }
 
 // FakeStreamingCommandRunner is a test double for StreamingCommandRunner.
-// It sends Lines to onStdout then returns Err.
+// It sends Lines to onStdout then returns Err. LastName and LastArgs capture
+// the command invocation for assertion — essential for tests that need to
+// verify `docker compose -f ...` is actually built correctly (a missing
+// subcommand once caused the installer to fail with "unknown shorthand flag").
 type FakeStreamingCommandRunner struct {
-	Lines []string
-	Err   error
+	Lines    []string
+	Err      error
+	LastName string
+	LastArgs []string
 }
 
 // Stream delivers Lines one by one to onStdout, then returns Err.
+// Captures name + args in LastName/LastArgs for test assertions.
 func (f *FakeStreamingCommandRunner) Stream(
 	_ context.Context,
 	onStdout, _ func(string),
-	_ string,
-	_ ...string,
+	name string,
+	args ...string,
 ) error {
+	f.LastName = name
+	f.LastArgs = append([]string(nil), args...)
 	for _, line := range f.Lines {
 		onStdout(line)
 	}

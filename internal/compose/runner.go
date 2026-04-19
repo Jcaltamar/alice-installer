@@ -11,6 +11,9 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/platform"
 )
 
+// stderrLines is the maximum number of stderr tail lines to include in errors.
+const stderrLines = 20
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -65,8 +68,11 @@ func ComposeArgs(files []string) []string {
 }
 
 // baseArgs builds the common args prefix for a compose sub-command.
+// The leading "compose" is REQUIRED — without it the invocation becomes
+// `docker -f ...` which the docker CLI rejects with "unknown shorthand flag: 'f'".
 func baseArgs(files []string, envFile string, sub ...string) []string {
-	args := ComposeArgs(files)
+	args := []string{"compose"}
+	args = append(args, ComposeArgs(files)...)
 	if envFile != "" {
 		args = append(args, "--env-file", envFile)
 	}
@@ -113,15 +119,30 @@ func (c *CLICompose) Version(ctx context.Context) (Version, error) {
 
 // Pull streams `docker compose pull` output; sends one PullProgressMsg per line.
 // Closes the channel when done. Returns any execution error.
+// On failure, stderr is captured and appended to the error so the user can see
+// the actual cause (e.g. "manifest unknown", "pull access denied").
 func (c *CLICompose) Pull(ctx context.Context, files []string, envFile string, progress chan<- PullProgressMsg) error {
 	args := baseArgs(files, envFile, "pull")
-	return c.streamer.Stream(ctx,
+	var stderrBuf []string
+	err := c.streamer.Stream(ctx,
 		func(line string) {
 			progress <- PullProgressMsg{Raw: line, Status: parsePullStatus(line)}
 		},
-		func(_ string) {}, // stderr ignored at this layer — captured by error return
+		func(line string) {
+			stderrBuf = append(stderrBuf, line)
+		},
 		"docker", args...,
 	)
+	if err != nil && len(stderrBuf) > 0 {
+		// Include the last stderrLines lines of stderr in the error message so the
+		// ResultModel failure view can show the actual root cause.
+		tail := stderrBuf
+		if len(tail) > stderrLines {
+			tail = tail[len(tail)-stderrLines:]
+		}
+		return fmt.Errorf("%w\n--- docker compose pull stderr ---\n%s", err, strings.Join(tail, "\n"))
+	}
+	return err
 }
 
 // Up streams `docker compose up --detach` output; sends one UpProgressMsg per line.
