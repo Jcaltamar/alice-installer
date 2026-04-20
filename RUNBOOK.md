@@ -216,3 +216,19 @@ Re-run the installer to pick up the GPU overlay.
 **Symptom**: `alice-installer: stdin is not a terminal. Run interactively in a TTY.`
 
 **Fix**: The installer requires a real TTY. Do not pipe input to it. If running over SSH, use `ssh -t user@host` to allocate a pseudo-TTY. For non-interactive use, use `--dry-run`.
+
+### Stale docker-group recovery
+
+**Symptom**: You ran `sudo usermod -aG docker $USER` and re-ran the installer in the same terminal session, but it still reports `Docker daemon unreachable (permission denied on /var/run/docker.sock)`.
+
+**What happens automatically**: The installer detects at startup that your user is in `/etc/group:docker` but the docker GID is absent from the current process's supplementary groups (classic post-`usermod` stale-session state). It automatically re-execs itself via `sg docker -c <argv>` so the replacement process inherits the docker group — no logout required.
+
+**Requirement**: The `sg` binary must be present (provided by the `login` package on Ubuntu/Debian; typically pre-installed on any standard distribution).
+
+**Fallback — if `sg` is not available**: The installer exits with code `75` (`EX_TEMPFAIL`) and prints a copy-paste-ready command:
+
+```
+newgrp docker && alice-installer <original flags>
+```
+
+Run that command to get a subshell with the updated group and re-run the installer in one step.

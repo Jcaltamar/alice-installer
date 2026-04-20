@@ -11,10 +11,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jcaltamar/alice-installer/internal/assets"
+	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
@@ -189,9 +191,30 @@ func tcpPortValues(m map[string]int) []int {
 	return vals
 }
 
+// staleCheckerFn is the injectable seam for stale-group detection.
+// nil → use bootstrap.DetectStaleDockerGroup.
+type staleCheckerFn func() (bootstrap.StaleGroupResult, error)
+
+// reexecFn is the injectable seam for the sg re-exec helper.
+// nil → use bootstrap.ReexecWithDockerGroup.
+type reexecFn func(argv []string, env []string) error
+
 // run is the testable entrypoint. It accepts args, writers, and an optional
 // depsFactory (nil → use newDependencies). Returns exit code.
 func run(args []string, out, errOut io.Writer, factory depsFactoryFunc) int {
+	return runWithStaleCheck(args, out, errOut, factory, nil, nil)
+}
+
+// runWithStaleCheck is the fully-injectable entrypoint used both by run() and
+// directly by tests.  staleChecker and reexecHelper are optional; nil means
+// use the real production implementations.
+func runWithStaleCheck(
+	args []string,
+	out, errOut io.Writer,
+	factory depsFactoryFunc,
+	staleChecker staleCheckerFn,
+	reexecHelper reexecFn,
+) int {
 	f, err := parseFlags(args)
 	if err != nil {
 		if err == flag.ErrHelp {
@@ -200,6 +223,38 @@ func run(args []string, out, errOut io.Writer, factory depsFactoryFunc) int {
 		}
 		fmt.Fprintln(errOut, "error:", err)
 		return 2
+	}
+
+	// -----------------------------------------------------------------------
+	// Stale docker-group gate — runs BEFORE ShowVersion, DryRun, or factory.
+	// When the user just ran `usermod -aG docker $USER` but hasn't re-logged
+	// in, the installer would fail the docker-daemon preflight.  Auto re-exec
+	// via `sg docker -c <argv>` so the child process inherits the new GID.
+	// -----------------------------------------------------------------------
+	if staleChecker == nil {
+		staleChecker = bootstrap.DetectStaleDockerGroup
+	}
+	if reexecHelper == nil {
+		reexecHelper = bootstrap.ReexecWithDockerGroup
+	}
+
+	staleResult, staleErr := staleChecker()
+	if staleErr == nil && staleResult.Stale {
+		execErr := reexecHelper(os.Args, os.Environ())
+		if execErr == nil {
+			// syscall.Exec replaced the process — control never reaches here in
+			// production.  In tests, the fake returns nil to signal "success".
+			return 0
+		}
+		// Re-exec failed: print fallback line and return EX_TEMPFAIL (75).
+		quotedArgs := make([]string, len(args))
+		for i, a := range args {
+			quotedArgs[i] = bootstrap.ShellQuote(a)
+		}
+		fallbackCmd := "newgrp docker && alice-installer " + strings.Join(quotedArgs, " ")
+		fmt.Fprintf(errOut, "error: failed to re-exec via sg: %v\n", execErr)
+		fmt.Fprintf(errOut, "run manually: %s\n", fallbackCmd)
+		return 75
 	}
 
 	if f.ShowVersion {

@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         iproute2 \
         kmod \
         iptables \
+        login \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user with passwordless sudo for the test.

@@ -208,6 +208,20 @@ if [ "$PASS1_EXIT" -eq 1 ]; then
       dump_diagnostics
       fail "pass 3 (post-relogin) exited $PASS3_EXIT"
     fi
+
+    # Pass 4: same-shell auto-reexec via sg.
+    # A bash -lc login shell inherits the pre-group-add PAM environment, so it
+    # exercises the stale-group detection and sg re-exec path.
+    log "=== pass 4: same-shell auto-reexec via sg ==="
+    PASS4_EXIT=0
+    docker exec -u testuser "$CID" bash -lc \
+      "/home/testuser/alice-installer ${INSTALLER_FLAGS[*]}" \
+      || PASS4_EXIT=$?
+    log "pass 4 exit code: $PASS4_EXIT"
+    if [ "$PASS4_EXIT" -ne 0 ]; then
+      dump_diagnostics
+      fail "pass 4 (same-shell sg reexec) exited $PASS4_EXIT"
+    fi
   elif [ "$PASS2_EXIT" -eq 0 ]; then
     log "pass 2 succeeded without usermod step (user already in group?)"
   else
@@ -227,6 +241,18 @@ elif [ "$PASS1_EXIT" -eq 75 ]; then
   if [ "$PASS2_EXIT" -ne 0 ]; then
     dump_diagnostics
     fail "pass 2 exited $PASS2_EXIT"
+  fi
+
+  # Pass 4 (in this branch pass 3 is skipped): same-shell auto-reexec via sg.
+  log "=== pass 4: same-shell auto-reexec via sg ==="
+  PASS4_EXIT=0
+  docker exec -u testuser "$CID" bash -lc \
+    "/home/testuser/alice-installer ${INSTALLER_FLAGS[*]}" \
+    || PASS4_EXIT=$?
+  log "pass 4 exit code: $PASS4_EXIT"
+  if [ "$PASS4_EXIT" -ne 0 ]; then
+    dump_diagnostics
+    fail "pass 4 (same-shell sg reexec) exited $PASS4_EXIT"
   fi
 
 elif [ "$PASS1_EXIT" -ne 0 ]; then

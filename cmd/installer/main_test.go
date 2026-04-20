@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/tui"
 )
 
@@ -217,3 +218,73 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 		t.Errorf("unknown flag exit code = %d, want 2", code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Stale-group gate tests (Phase 4)
+// ---------------------------------------------------------------------------
+
+// TestRunStaleGroupReexecSuccess verifies that when the stale-group detector
+// returns Stale=true and the reexec helper succeeds (returns nil), run() returns
+// the execFn-signalled exit code 0 without proceeding to the factory/TUI.
+func TestRunStaleGroupReexecSuccess(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	// staleChecker: report stale=true
+	staleChecker := func() (bootstrap.StaleGroupResult, error) {
+		return bootstrap.StaleGroupResult{Stale: true, DockerGID: 999}, nil
+	}
+	// reexecFn: simulate success (returns nil — process would be replaced for real)
+	reexecFn := func(argv []string, env []string) error {
+		return nil
+	}
+
+	code := runWithStaleCheck(
+		[]string{"--unattended", "--workspace-name=test"},
+		&out, &errOut,
+		nil,        // factory — should not be called
+		staleChecker,
+		reexecFn,
+	)
+
+	// When reexec succeeds (nil), run should return 0 — process was "replaced".
+	if code != 0 {
+		t.Errorf("stale+reexec-ok exit code = %d, want 0; stderr: %s", code, errOut.String())
+	}
+}
+
+// TestRunStaleGroupReexecFallback verifies that when the stale-group detector
+// returns Stale=true but sg is not available (reexec returns an error), run()
+// prints a fallback line containing "newgrp docker" and returns exit code 75.
+func TestRunStaleGroupReexecFallback(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	staleChecker := func() (bootstrap.StaleGroupResult, error) {
+		return bootstrap.StaleGroupResult{Stale: true, DockerGID: 999}, nil
+	}
+	reexecFn := func(argv []string, env []string) error {
+		return &sgNotFoundError{}
+	}
+
+	code := runWithStaleCheck(
+		[]string{"--unattended", "--workspace-name=test", "--deploy=false"},
+		&out, &errOut,
+		nil,
+		staleChecker,
+		reexecFn,
+	)
+
+	if code != 75 {
+		t.Errorf("stale+no-sg exit code = %d, want 75; stderr: %s", code, errOut.String())
+	}
+	stderr := errOut.String()
+	if !strings.Contains(stderr, "newgrp docker") {
+		t.Errorf("expected stderr to contain 'newgrp docker', got: %s", stderr)
+	}
+}
+
+// sgNotFoundError is a test-only error type simulating sg not being on PATH.
+type sgNotFoundError struct{}
+
+func (e *sgNotFoundError) Error() string { return "sg not found: exec: sg: not found in PATH" }
