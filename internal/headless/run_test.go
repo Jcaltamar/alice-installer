@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
@@ -156,8 +157,8 @@ func happyDeps(t *testing.T) (headless.Dependencies, headless.Config) {
 	fakeCompose := &compose.FakeComposeRunner{
 		VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"},
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "healthy"},
-			{Service: "web", Status: "healthy"},
+			{Service: "backend", Status: "healthy", State: "running"},
+			{Service: "web", Status: "healthy", State: "running"},
 		},
 	}
 	cfg := headless.Config{WorkspaceName: "testws", AcceptAllBootstrap: true, Deploy: true}
@@ -275,7 +276,7 @@ func TestHeadlessRun_BootstrapFixesDockerMissing(t *testing.T) {
 		Envgen:               &envgen.Templater{PasswordGen: secrets.CryptoRandGenerator{}},
 		Writer:               &envgen.FakeWriter{Written: make(map[string][]byte)},
 		Assets:               headless.TemplateAssets{BaselineYAML: []byte("# c"), OverlayYAML: []byte("# g"), EnvExample: minimalEnvExample},
-		Compose:              &compose.FakeComposeRunner{Healths: []compose.ServiceHealth{{Service: "svc", Status: "healthy"}}},
+		Compose:              &compose.FakeComposeRunner{Healths: []compose.ServiceHealth{{Service: "svc", Status: "healthy", State: "running"}}},
 		Arch:                 &platform.FakeArchDetector{Arch: platform.ArchAMD64},
 		// Docker binary NOT present → docker_install action.
 		Env:              bootstrap.BootstrapEnv{UserName: "testuser", DockerBinaryPresent: false},
@@ -512,7 +513,7 @@ func TestHeadlessRun_NoInteractiveDependency(t *testing.T) {
 		Writer:               &envgen.FakeWriter{Written: make(map[string][]byte)},
 		Assets:               headless.TemplateAssets{BaselineYAML: []byte("# c"), OverlayYAML: []byte("# g"), EnvExample: minimalEnvExample},
 		Compose: &compose.FakeComposeRunner{
-			Healths: []compose.ServiceHealth{{Service: "svc", Status: "healthy"}},
+			Healths: []compose.ServiceHealth{{Service: "svc", Status: "healthy", State: "running"}},
 		},
 		Arch:             &platform.FakeArchDetector{Arch: platform.ArchAMD64},
 		Env:              bootstrap.BootstrapEnv{UserName: "u", DockerBinaryPresent: true, UserInDockerGroup: true},
@@ -609,5 +610,87 @@ func TestHeadlessRun_DeploySkippedWhenFlagFalse(t *testing.T) {
 	}
 	if !strings.Contains(log, "deploy skipped") {
 		t.Errorf("expected 'deploy skipped' in log\n%s", log)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestHeadlessRun_VerifyIsReadyRule
+// ---------------------------------------------------------------------------
+
+// TestHeadlessRun_VerifyIsReadyRule validates that the verify loop accepts or
+// rejects services according to compose.IsReady (State-aware rule), not just
+// the old s.Status != "healthy" check.
+func TestHeadlessRun_VerifyIsReadyRule(t *testing.T) {
+	tests := []struct {
+		name        string
+		healths     []compose.ServiceHealth
+		wantErr     bool
+		errContains []string // substrings that must appear in the error
+	}{
+		{
+			name: "all healthy+running → success",
+			healths: []compose.ServiceHealth{
+				{Service: "backend", Status: "healthy", State: "running"},
+				{Service: "web", Status: "healthy", State: "running"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "no-healthcheck+running → success (new rule)",
+			healths: []compose.ServiceHealth{
+				{Service: "rtsp", Status: "", State: "running"},
+				{Service: "web", Status: "none", State: "running"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "crash-loop restarting → error with service name and state",
+			healths: []compose.ServiceHealth{
+				{Service: "backend", Status: "healthy", State: "running"},
+				{Service: "websocket", Status: "", State: "restarting"},
+			},
+			wantErr:     true,
+			errContains: []string{"websocket", "restarting"},
+		},
+		{
+			name: "healthy but exited → error with state visible",
+			healths: []compose.ServiceHealth{
+				{Service: "db", Status: "healthy", State: "exited"},
+			},
+			wantErr:     true,
+			errContains: []string{"db", "exited"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			deps, cfg := happyDeps(t)
+			deps.WorkspaceDir = dir
+			deps.PreflightCoordinator = happyCoord("/opt/media", "/opt/config", dir)
+			deps.Compose = &compose.FakeComposeRunner{
+				VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"},
+				Healths:    tt.healths,
+			}
+			// Use short timeouts so the test doesn't wait 60s for timeout cases.
+			cfg.VerifyTimeout = 50 * time.Millisecond
+			cfg.VerifyPollInterval = 10 * time.Millisecond
+			var buf bytes.Buffer
+			err := headless.Run(context.Background(), cfg, deps, &buf)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error but got nil\nlog:\n%s", buf.String())
+				}
+				for _, sub := range tt.errContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected nil error but got: %v\nlog:\n%s", err, buf.String())
+				}
+			}
+		})
 	}
 }

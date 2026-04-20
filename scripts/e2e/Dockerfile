@@ -10,7 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         kmod \
         iptables \
         login \
+        fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
+
+# Pre-configure the nested Docker daemon to use fuse-overlayfs. The host
+# already uses overlayfs, and stacking overlayfs on overlayfs fails with
+# "operation not permitted" on whiteout files during image layer extraction.
+# fuse-overlayfs avoids the stacking conflict and lets FULL_DEPLOY=1 pulls
+# finish cleanly inside the systemd test container.
+RUN mkdir -p /etc/docker \
+    && printf '{"storage-driver":"fuse-overlayfs"}\n' > /etc/docker/daemon.json
 
 # Create a non-root user with passwordless sudo for the test.
 # The installer will add this user to the docker group during bootstrap.

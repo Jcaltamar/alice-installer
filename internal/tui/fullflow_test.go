@@ -96,8 +96,8 @@ func TestFullFlowHappyPath(t *testing.T) {
 			{Service: "web", Status: "Started"},
 		},
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "healthy"},
-			{Service: "web", Status: "healthy"},
+			{Service: "backend", Status: "healthy", State: "running"},
+			{Service: "web", Status: "healthy", State: "running"},
 		},
 	}
 

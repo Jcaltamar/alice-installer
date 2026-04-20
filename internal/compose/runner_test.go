@@ -247,6 +247,45 @@ func TestCLICompose_HealthStatus_ParsesJSONLines(t *testing.T) {
 	}
 }
 
+func TestCLICompose_HealthStatus_ParsesStateField(t *testing.T) {
+	tests := []struct {
+		name      string
+		psOutput  string
+		wantState string
+	}{
+		{
+			name:      "State present in JSON → parsed correctly",
+			psOutput:  `{"Service":"backend","State":"running","Health":"healthy"}` + "\n",
+			wantState: "running",
+		},
+		{
+			name:      "State absent in JSON → defaults to empty string",
+			psOutput:  `{"Service":"backend","Health":"healthy"}` + "\n",
+			wantState: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &platform.FakeCommandRunner{
+				Outputs: map[string]platform.FakeCmdOutput{
+					"docker": {Stdout: []byte(tt.psOutput)},
+				},
+			}
+			c := compose.NewCLICompose(runner, nil)
+			statuses, err := c.HealthStatus(context.Background(), []string{"docker-compose.yml"}, ".env")
+			if err != nil {
+				t.Fatalf("HealthStatus() error = %v, want nil", err)
+			}
+			if len(statuses) != 1 {
+				t.Fatalf("HealthStatus() returned %d entries, want 1", len(statuses))
+			}
+			if statuses[0].State != tt.wantState {
+				t.Errorf("statuses[0].State = %q, want %q", statuses[0].State, tt.wantState)
+			}
+		})
+	}
+}
+
 func TestCLICompose_HealthStatus_ErrorPropagated(t *testing.T) {
 	wantErr := errors.New("ps failed")
 	runner := &platform.FakeCommandRunner{

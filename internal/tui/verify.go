@@ -70,15 +70,14 @@ func (v VerifyModel) poll() tea.Msg {
 	if err != nil {
 		return InstallFailureMsg{Err: err, Stage: "verify"}
 	}
-	allHealthy := true
+	allReady := true
 	for _, s := range services {
-		// Services with no healthcheck are considered healthy.
-		if s.Status != "healthy" && s.Status != "none" && s.Status != "" {
-			allHealthy = false
+		if !compose.IsReady(s) {
+			allReady = false
 			break
 		}
 	}
-	if allHealthy && len(services) > 0 {
+	if allReady && len(services) > 0 {
 		return InstallSuccessMsg{Services: services}
 	}
 	return HealthReportMsg{Services: services, Done: false}
@@ -151,24 +150,33 @@ func (v VerifyModel) View() string {
 	sb.WriteString(title)
 	sb.WriteString("\n\n")
 
-	healthy := 0
+	ready := 0
 	for _, s := range v.services {
-		if s.Status == "healthy" || s.Status == "none" || s.Status == "" {
-			healthy++
+		if compose.IsReady(s) {
+			ready++
 		}
 	}
 
 	if len(v.services) > 0 {
-		sb.WriteString(v.theme.TextMuted.Render(fmt.Sprintf("%d/%d healthy", healthy, len(v.services))))
+		sb.WriteString(v.theme.TextMuted.Render(fmt.Sprintf("%d/%d healthy", ready, len(v.services))))
 		sb.WriteString("\n")
 		for _, s := range v.services {
 			dot := v.theme.TextMuted.Render("●")
-			if s.Status == "healthy" {
+			if compose.IsReady(s) {
 				dot = v.theme.Success.Render("●")
 			} else if s.Status == "unhealthy" {
 				dot = v.theme.Danger.Render("●")
 			}
-			sb.WriteString(fmt.Sprintf("  %s  %s (%s)\n", dot, s.Service, s.Status))
+			// Show state when it adds information: empty/none health or non-running state.
+			label := s.Status
+			if s.Status == "" || s.Status == "none" {
+				if s.State != "" {
+					label = s.State
+				}
+			} else if s.State != "" && s.State != "running" {
+				label = fmt.Sprintf("%s/%s", s.Status, s.State)
+			}
+			sb.WriteString(fmt.Sprintf("  %s  %s (%s)\n", dot, s.Service, label))
 		}
 	} else {
 		sb.WriteString(v.spinner.View() + " " + v.theme.TextMuted.Render("Polling healthchecks…"))

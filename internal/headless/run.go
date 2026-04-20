@@ -57,6 +57,14 @@ type Config struct {
 
 	// GPUDetected controls whether the GPU overlay compose file is included.
 	GPUDetected bool
+
+	// VerifyTimeout overrides the default 60s health-check timeout.
+	// When zero, the production default (60s) is used.
+	VerifyTimeout time.Duration
+
+	// VerifyPollInterval overrides the default 3s poll interval.
+	// When zero, the production default (3s) is used.
+	VerifyPollInterval time.Duration
 }
 
 // ---------------------------------------------------------------------------
@@ -308,10 +316,14 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 		// 6. Verify
 		// ------------------------------------------------------------------
 		logf(out, "verify", "waiting for services to become healthy…")
-		const (
+		healthPollInterval := cfg.VerifyPollInterval
+		if healthPollInterval == 0 {
 			healthPollInterval = 3 * time.Second
-			healthTimeout      = 60 * time.Second
-		)
+		}
+		healthTimeout := cfg.VerifyTimeout
+		if healthTimeout == 0 {
+			healthTimeout = 60 * time.Second
+		}
 		deadline := time.Now().Add(healthTimeout)
 		for time.Now().Before(deadline) {
 			statuses, healthErr := deps.Compose.HealthStatus(ctx, composeFiles, envPath)
@@ -321,16 +333,17 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 				continue
 			}
 
-			allHealthy := true
+			allReady := true
 			var unhealthy []string
 			for _, s := range statuses {
-				if s.Status != "healthy" {
-					allHealthy = false
-					unhealthy = append(unhealthy, fmt.Sprintf("%s(%s)", s.Service, s.Status))
+				if !compose.IsReady(s) {
+					allReady = false
+					label := fmt.Sprintf("%s(%s/%s)", s.Service, s.Status, s.State)
+					unhealthy = append(unhealthy, label)
 				}
 			}
 
-			if allHealthy && len(statuses) > 0 {
+			if allReady && len(statuses) > 0 {
 				logf(out, "verify", "all %d services healthy", len(statuses))
 				return nil
 			}
@@ -343,8 +356,9 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 		statuses, _ := deps.Compose.HealthStatus(ctx, composeFiles, envPath)
 		var unhealthy []string
 		for _, s := range statuses {
-			if s.Status != "healthy" {
-				unhealthy = append(unhealthy, fmt.Sprintf("%s(%s)", s.Service, s.Status))
+			if !compose.IsReady(s) {
+				label := fmt.Sprintf("%s(%s/%s)", s.Service, s.Status, s.State)
+				unhealthy = append(unhealthy, label)
 			}
 		}
 		return fmt.Errorf("verify: timed out waiting for healthy services after %s; unhealthy: %s",

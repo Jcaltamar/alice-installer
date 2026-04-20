@@ -41,8 +41,8 @@ func TestVerifyModelInitReturnsCmd(t *testing.T) {
 func TestVerifyModelFirstTickPopulatesServicesNotDone(t *testing.T) {
 	runner := &compose.FakeComposeRunner{
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "starting"},
-			{Service: "web", Status: "healthy"},
+			{Service: "backend", Status: "starting", State: "running"},
+			{Service: "web", Status: "healthy", State: "running"},
 		},
 	}
 	m := buildVerifyModel(runner, 3*time.Minute)
@@ -62,8 +62,8 @@ func TestVerifyModelFirstTickPopulatesServicesNotDone(t *testing.T) {
 func TestVerifyModelAllHealthyEmitsInstallSuccessMsg(t *testing.T) {
 	runner := &compose.FakeComposeRunner{
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "healthy"},
-			{Service: "web", Status: "healthy"},
+			{Service: "backend", Status: "healthy", State: "running"},
+			{Service: "web", Status: "healthy", State: "running"},
 		},
 	}
 	m := buildVerifyModel(runner, 3*time.Minute)
@@ -108,7 +108,7 @@ func TestVerifyModelTimeoutEmitsInstallFailureMsg(t *testing.T) {
 func TestVerifyModelRKeyTriggersImmediateTick(t *testing.T) {
 	runner := &compose.FakeComposeRunner{
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "healthy"},
+			{Service: "backend", Status: "healthy", State: "running"},
 		},
 	}
 	m := buildVerifyModel(runner, 3*time.Minute)
@@ -126,5 +126,53 @@ func TestVerifyModelViewContainsTitle(t *testing.T) {
 	view := m.View()
 	if view == "" {
 		t.Error("View() should not be empty")
+	}
+}
+
+// TestVerifyModel_IsReadyRule covers the State-aware acceptance rule in poll().
+func TestVerifyModel_IsReadyRule(t *testing.T) {
+	tests := []struct {
+		name        string
+		healths     []compose.ServiceHealth
+		wantSuccess bool // true → InstallSuccessMsg expected; false → HealthReportMsg expected
+	}{
+		{
+			name: "no-healthcheck+running → InstallSuccessMsg (new rule)",
+			healths: []compose.ServiceHealth{
+				{Service: "rtsp", Status: "", State: "running"},
+				{Service: "web", Status: "none", State: "running"},
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "crash-loop restarting → HealthReportMsg (not success)",
+			healths: []compose.ServiceHealth{
+				{Service: "websocket", Status: "", State: "restarting"},
+			},
+			wantSuccess: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &compose.FakeComposeRunner{Healths: tt.healths}
+			m := buildVerifyModel(runner, 3*time.Minute)
+			m, cmd := m.Update(HealthTickMsg{})
+			_ = m
+			if tt.wantSuccess {
+				if cmd == nil {
+					t.Fatal("expected a Cmd on success, got nil")
+				}
+				msg := cmd()
+				if _, ok := msg.(InstallSuccessMsg); !ok {
+					t.Errorf("expected InstallSuccessMsg, got %T", msg)
+				}
+			} else {
+				// Not all ready → HealthReportMsg (next tick scheduled), done==false.
+				if m.done {
+					t.Error("should not be done when not all services are ready")
+				}
+			}
+		})
 	}
 }

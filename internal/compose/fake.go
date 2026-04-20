@@ -12,8 +12,12 @@ type FakeComposeRunner struct {
 	UpProgressMsgs   []UpProgressMsg
 	UpErr            error
 	DownErr          error
-	Healths          []ServiceHealth
-	HealthErr        error
+	// Healths is the slice of ServiceHealth returned by HealthStatus.
+	// Both Status (Health column) and State (lifecycle column) are honoured
+	// by compose.IsReady — set both fields in tests that exercise the
+	// State-aware acceptance rule.
+	Healths   []ServiceHealth
+	HealthErr error
 }
 
 // Version returns VersionVal, VersionErr.

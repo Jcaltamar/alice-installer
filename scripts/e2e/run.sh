@@ -141,12 +141,25 @@ INSTALLER_FLAGS=(
 
 # ---------------------------------------------------------------------------
 # dump_diagnostics — called on unexpected non-zero exit.
+# Optional args: service names to dump per-service compose logs for.
 # ---------------------------------------------------------------------------
 dump_diagnostics() {
   log "--- container logs (last 50 lines) ---"
   docker logs "$CID" 2>&1 | tail -50 || true
   log "--- journalctl docker ---"
   docker exec "$CID" journalctl -u docker --no-pager 2>/dev/null | tail -50 || true
+
+  # When service names are provided, dump each one's compose logs.
+  if [ "$#" -gt 0 ]; then
+    local svc
+    for svc in "$@"; do
+      log "--- compose logs: $svc (last 50 lines) ---"
+      docker exec "$CID" docker compose \
+        -f /home/testuser/.config/alice-guardian/docker-compose.yml \
+        --env-file /home/testuser/.config/alice-guardian/.env \
+        logs --no-color --tail=50 "$svc" 2>&1 | tail -60 || true
+    done
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -310,14 +323,34 @@ if [ "${FULL_DEPLOY:-0}" = "1" ]; then
     --deploy=true
   )
   FULL_EXIT=0
+  INSTALLER_LOG=$(mktemp)
   docker exec -u testuser "$CID" \
-    /home/testuser/alice-installer "${FULL_FLAGS[@]}" \
+    /home/testuser/alice-installer "${FULL_FLAGS[@]}" 2>&1 | tee "$INSTALLER_LOG" \
     || FULL_EXIT=$?
   if [ "$FULL_EXIT" -ne 0 ]; then
     log "full deploy failed (exit $FULL_EXIT) — dumping diagnostics:"
-    dump_diagnostics
+    # Parse the last "unhealthy: svc1(state), svc2(state), ..." line from the
+    # installer output and extract service names (the part before the first '(').
+    UNHEALTHY_LINE=$(grep -o 'unhealthy: [^;]*' "$INSTALLER_LOG" | tail -1 || true)
+    SVCS=()
+    if [ -n "$UNHEALTHY_LINE" ]; then
+      # Extract tokens like "svc(status/state)" → "svc"
+      while IFS= read -r token; do
+        svc="${token%%(*}"
+        svc="${svc## }"
+        svc="${svc%% }"
+        [ -n "$svc" ] && SVCS+=("$svc")
+      done < <(echo "$UNHEALTHY_LINE" | sed 's/unhealthy: //' | tr ',' '\n')
+    fi
+    rm -f "$INSTALLER_LOG"
+    if [ "${#SVCS[@]}" -gt 0 ]; then
+      dump_diagnostics "${SVCS[@]}"
+    else
+      dump_diagnostics
+    fi
     fail "full deploy exited $FULL_EXIT"
   fi
+  rm -f "$INSTALLER_LOG"
   log "container list after deploy:"
   docker exec "$CID" docker ps --format '{{.Names}}: {{.Status}}'
   assert "redis is running" \

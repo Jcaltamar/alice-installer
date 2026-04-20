@@ -113,7 +113,7 @@ func TestFullFlowBootstrapHappyPath(t *testing.T) {
 			{Service: "backend", Status: "Started"},
 		},
 		Healths: []compose.ServiceHealth{
-			{Service: "backend", Status: "healthy"},
+			{Service: "backend", Status: "healthy", State: "running"},
 		},
 	}
 

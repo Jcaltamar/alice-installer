@@ -27,7 +27,25 @@ type Version struct {
 // ServiceHealth holds the health status for a single compose service.
 type ServiceHealth struct {
 	Service string
-	Status  string // "healthy" | "unhealthy" | "starting" | "none"
+	Status  string // Health column: "healthy" | "unhealthy" | "starting" | "none" | ""
+	State   string // Lifecycle: "running" | "exited" | "restarting" | "paused" | "created" | "dead" | ""
+}
+
+// IsReady returns true when a service is acceptable for the verify stage.
+//
+// Rule: (Status=="healthy" AND State=="running") || (Status∈{"","none"} && State=="running")
+//
+// A healthy service that is NOT running (e.g. exited) is NOT ready.
+// Services without a healthcheck that are running → ready.
+// Services without a healthcheck that are restarting/exited → NOT ready.
+func IsReady(s ServiceHealth) bool {
+	if s.State != "running" {
+		return false
+	}
+	if s.Status == "healthy" || s.Status == "" || s.Status == "none" {
+		return true
+	}
+	return false
 }
 
 // PullProgressMsg carries a single line of progress from `docker compose pull`.
@@ -170,6 +188,7 @@ func (c *CLICompose) Down(ctx context.Context, files []string, envFile string) e
 // psLine is the shape of each JSON line from `docker compose ps --format json`.
 type psLine struct {
 	Service string `json:"Service"`
+	State   string `json:"State"`
 	Health  string `json:"Health"`
 }
 
@@ -195,6 +214,7 @@ func (c *CLICompose) HealthStatus(ctx context.Context, files []string, envFile s
 		statuses = append(statuses, ServiceHealth{
 			Service: row.Service,
 			Status:  row.Health,
+			State:   row.State,
 		})
 	}
 	return statuses, nil
