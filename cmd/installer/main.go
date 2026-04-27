@@ -24,15 +24,21 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
+	"github.com/jcaltamar/alice-installer/internal/restart"
 	"github.com/jcaltamar/alice-installer/internal/secrets"
 	"github.com/jcaltamar/alice-installer/internal/theme"
 	"github.com/jcaltamar/alice-installer/internal/tui"
+	"github.com/jcaltamar/alice-installer/internal/update"
 )
 
 // version is overridden at build time:
 //
 //	-ldflags "-X main.version=v1.2.3"
 var version = "dev"
+
+var runHeadlessFn = headless.Run
+var runUpdateFn = update.Run
+var runRestartFn = restart.Run
 
 // flags holds parsed command-line options.
 type flags struct {
@@ -49,6 +55,99 @@ type flags struct {
 	AcceptAllBootstrap  bool   // --accept-all-bootstrap: auto-run bootstrap actions
 	Deploy              bool   // --deploy: run docker compose up after env-write
 	SkipPull            bool   // --skip-pull: skip docker compose pull (env-write only)
+}
+
+type cliMode string
+
+const (
+	modeInstall cliMode = "install"
+	modeUpdate  cliMode = "update"
+	modeRestart cliMode = "restart"
+)
+
+func parseCLI(args []string) (cliMode, []string, error) {
+	commandCounts := map[cliMode]int{
+		modeUpdate:  0,
+		modeRestart: 0,
+	}
+	normalized := make([]string, 0, len(args))
+	recordCommand := func(mode cliMode) {
+		commandCounts[mode]++
+	}
+
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+
+		if tok == "--" {
+			for j := i + 1; j < len(args); j++ {
+				switch args[j] {
+				case string(modeUpdate):
+					recordCommand(modeUpdate)
+					continue
+				case string(modeRestart):
+					recordCommand(modeRestart)
+					continue
+				}
+				return modeInstall, nil, fmt.Errorf("unknown positional argument: %q", args[j])
+			}
+			break
+		}
+
+		if strings.HasPrefix(tok, "--") {
+			if eq := strings.Index(tok, "="); eq >= 0 {
+				normalized = append(normalized, tok)
+				continue
+			}
+			normalized = append(normalized, tok)
+			if rootFlagNeedsValue(tok) && i+1 < len(args) {
+				i++
+				normalized = append(normalized, args[i])
+			}
+			continue
+		}
+
+		if strings.HasPrefix(tok, "-") {
+			normalized = append(normalized, tok)
+			continue
+		}
+
+		switch tok {
+		case string(modeUpdate):
+			recordCommand(modeUpdate)
+			continue
+		case string(modeRestart):
+			recordCommand(modeRestart)
+			continue
+		}
+
+		return modeInstall, nil, fmt.Errorf("unknown positional argument: %q", tok)
+	}
+
+	if commandCounts[modeUpdate] > 1 {
+		return modeInstall, nil, fmt.Errorf("duplicate command %q", modeUpdate)
+	}
+	if commandCounts[modeRestart] > 1 {
+		return modeInstall, nil, fmt.Errorf("duplicate command %q", modeRestart)
+	}
+	if commandCounts[modeUpdate] == 1 && commandCounts[modeRestart] == 1 {
+		return modeInstall, nil, fmt.Errorf("multiple commands provided: %q and %q", modeUpdate, modeRestart)
+	}
+	if commandCounts[modeUpdate] == 1 {
+		return modeUpdate, normalized, nil
+	}
+	if commandCounts[modeRestart] == 1 {
+		return modeRestart, normalized, nil
+	}
+	return modeInstall, normalized, nil
+}
+
+func rootFlagNeedsValue(flagName string) bool {
+	switch flagName {
+	case "--env-output", "--media-dir", "--config-dir", "--workspace-dir", "--workspace-name":
+		return true
+	default:
+		return false
+	}
 }
 
 // defaultWorkspaceDir resolves the default WorkspaceDir from XDG_CONFIG_HOME or $HOME/.config.
@@ -215,7 +314,13 @@ func runWithStaleCheck(
 	staleChecker staleCheckerFn,
 	reexecHelper reexecFn,
 ) int {
-	f, err := parseFlags(args)
+	mode, normalizedArgs, err := parseCLI(args)
+	if err != nil {
+		fmt.Fprintln(errOut, "error:", err)
+		return 2
+	}
+
+	f, err := parseFlags(normalizedArgs)
 	if err != nil {
 		if err == flag.ErrHelp {
 			// --help: flag package already wrote usage to stdout
@@ -268,6 +373,34 @@ func runWithStaleCheck(
 
 	ctx := context.Background()
 
+	if mode == modeUpdate {
+		tuiDeps := factory(ctx, f)
+		cfg := update.Config{WorkspaceDir: f.WorkspaceDir}
+		deps := update.Dependencies{
+			Compose: tuiDeps.Compose,
+			GPU:     tuiDeps.GPU,
+		}
+		if runErr := runUpdateFn(ctx, cfg, deps, out); runErr != nil {
+			fmt.Fprintln(errOut, "error:", runErr)
+			return 1
+		}
+		return 0
+	}
+
+	if mode == modeRestart {
+		tuiDeps := factory(ctx, f)
+		cfg := restart.Config{WorkspaceDir: f.WorkspaceDir}
+		deps := restart.Dependencies{
+			Compose: tuiDeps.Compose,
+			GPU:     tuiDeps.GPU,
+		}
+		if runErr := runRestartFn(ctx, cfg, deps, out); runErr != nil {
+			fmt.Fprintln(errOut, "error:", runErr)
+			return 1
+		}
+		return 0
+	}
+
 	if f.DryRun {
 		deps := factory(ctx, f)
 		report := deps.PreflightCoordinator.Run(ctx)
@@ -313,7 +446,7 @@ func runWithStaleCheck(
 			RequiredTCPPorts: tuiDeps.RequiredTCPPorts,
 		}
 
-		if runErr := headless.Run(ctx, cfg, hdeps, out); runErr != nil {
+		if runErr := runHeadlessFn(ctx, cfg, hdeps, out); runErr != nil {
 			fmt.Fprintln(errOut, "error:", runErr)
 			// EX_TEMPFAIL (75) for ErrReloginRequired
 			if isReloginRequired(runErr) {

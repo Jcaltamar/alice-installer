@@ -126,7 +126,7 @@ Or use [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) to remove 
 
 ## Upgrade
 
-### Standard upgrade (new binary, re-use existing .env)
+### Standard upgrade (new binary, in-place update)
 
 ```sh
 # Download and extract the new binary
@@ -134,11 +134,34 @@ curl -LO https://github.com/Jcaltamar/alice-installer/releases/latest/download/a
 tar -xzf alice-installer_<version>_linux_amd64.tar.gz
 chmod +x alice-installer
 
-# Re-run against the existing .env
-./alice-installer --env-output /opt/alice-media/.env
+# Refresh an existing install from persisted workspace artifacts
+./alice-installer update --workspace-dir /opt/alice-media
 ```
 
-The installer will detect that `.env` already exists. If the workspace and ports have not changed, it will rewrite the file in place (atomic rename) and then pull new images and restart services.
+`update` is non-interactive and does not regenerate install artifacts. It requires:
+
+- `/opt/alice-media/.env`
+- `/opt/alice-media/docker-compose.yml`
+
+Then it performs `docker compose pull` followed by `docker compose up -d` using those exact files.
+
+### In-place service restart (no image refresh)
+
+```sh
+# Restart running services using existing workspace artifacts
+./alice-installer restart --workspace-dir /opt/alice-media
+```
+
+`restart` is non-interactive and uses the same artifact requirements as `update`:
+
+- `/opt/alice-media/.env`
+- `/opt/alice-media/docker-compose.yml`
+
+If `/opt/alice-media/docker-compose.gpu.yml` exists and GPU toolkit detection is positive, it is included after the base compose file (same ordering contract as `update`).
+
+`restart` executes exact `docker compose restart` semantics. It does **not** run install flows and does **not** substitute `down/up` or `pull/up`.
+
+Cross-platform behavior is intentionally equivalent on Linux (amd64/arm64) and Windows (amd64): command recognition, artifact targeting, success signaling, and failure signaling remain the same.
 
 ### Check what changed
 

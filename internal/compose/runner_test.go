@@ -180,6 +180,35 @@ func TestCLICompose_Up_ErrorPropagated(t *testing.T) {
 	}
 }
 
+func TestCLICompose_Restart_Success(t *testing.T) {
+	runner := &platform.FakeCommandRunner{
+		Outputs: map[string]platform.FakeCmdOutput{
+			"docker": {Stdout: []byte("")},
+		},
+	}
+	c := compose.NewCLICompose(runner, nil)
+
+	err := c.Restart(context.Background(), []string{"docker-compose.yml"}, ".env")
+	if err != nil {
+		t.Errorf("Restart() error = %v, want nil", err)
+	}
+}
+
+func TestCLICompose_Restart_ErrorPropagated(t *testing.T) {
+	wantErr := errors.New("restart failed")
+	runner := &platform.FakeCommandRunner{
+		Outputs: map[string]platform.FakeCmdOutput{
+			"docker": {Err: wantErr},
+		},
+	}
+	c := compose.NewCLICompose(runner, nil)
+
+	err := c.Restart(context.Background(), []string{"docker-compose.yml"}, ".env")
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Restart() error = %v, want %v", err, wantErr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CLICompose — Down
 // ---------------------------------------------------------------------------
@@ -379,5 +408,24 @@ func TestFakeComposeRunner_HealthStatusReturnsConfigured(t *testing.T) {
 	}
 	if got[1].Status != "unhealthy" {
 		t.Errorf("got[1].Status = %q, want unhealthy", got[1].Status)
+	}
+}
+
+func TestFakeComposeRunner_RestartRecordsCallAndReturnsErr(t *testing.T) {
+	wantErr := errors.New("restart error")
+	fake := &compose.FakeComposeRunner{RestartErr: wantErr}
+
+	err := fake.Restart(context.Background(), []string{"docker-compose.yml"}, ".env")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Restart() error = %v, want %v", err, wantErr)
+	}
+	if len(fake.RestartCalls) != 1 {
+		t.Fatalf("RestartCalls len = %d, want 1", len(fake.RestartCalls))
+	}
+	if fake.RestartCalls[0].EnvFile != ".env" {
+		t.Fatalf("RestartCalls[0].EnvFile = %q, want .env", fake.RestartCalls[0].EnvFile)
+	}
+	if len(fake.CallOrder) == 0 || fake.CallOrder[0] != "restart" {
+		t.Fatalf("CallOrder = %v, want [restart]", fake.CallOrder)
 	}
 }

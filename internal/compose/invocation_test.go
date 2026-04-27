@@ -50,6 +50,24 @@ func TestCLICompose_Up_InvokesDockerCompose(t *testing.T) {
 	}
 }
 
+func TestCLICompose_Restart_InvokesDockerComposeRestart(t *testing.T) {
+	runner := &platform.FakeCommandRunner{}
+	c := compose.NewCLICompose(runner, nil)
+
+	_ = c.Restart(context.Background(), []string{"docker-compose.yml"}, ".env")
+
+	if runner.LastName != "docker" {
+		t.Fatalf("LastName = %q, want %q", runner.LastName, "docker")
+	}
+	joined := strings.Join(append([]string{runner.LastName}, runner.LastArgs...), " ")
+	if !strings.Contains(joined, "docker compose -f docker-compose.yml") {
+		t.Errorf("invocation = %q, want prefix 'docker compose -f docker-compose.yml'", joined)
+	}
+	if !strings.Contains(joined, " restart") {
+		t.Errorf("invocation = %q, missing restart subcommand", joined)
+	}
+}
+
 func firstOr(ss []string, fallback string) string {
 	if len(ss) == 0 {
 		return fallback

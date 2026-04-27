@@ -16,7 +16,40 @@ After install:
 alice-installer          # launch the interactive TUI
 alice-installer --help   # list flags
 alice-installer --dry-run  # run preflight only (no writes, no deploy)
+alice-installer update   # refresh an existing deployment in-place
+alice-installer restart  # restart existing services in-place
 ```
+
+## Update or restart an existing installation
+
+Use `alice-installer update` to refresh containers using the existing workspace artifacts from a prior install.
+
+```sh
+# default workspace: ${XDG_CONFIG_HOME:-$HOME/.config}/alice-guardian
+alice-installer update
+
+# explicit workspace
+alice-installer update --workspace-dir /opt/alice-media
+```
+
+Update mode is non-interactive. It reuses `docker-compose.yml` and `.env` from the selected workspace, then runs:
+
+1. `docker compose pull`
+2. `docker compose up -d`
+
+If `.env` or `docker-compose.yml` are missing, update exits with an actionable error instead of falling back to install flows.
+
+Use `alice-installer restart` when you only need to restart running services without pulling images or recreating containers.
+
+```sh
+# default workspace: ${XDG_CONFIG_HOME:-$HOME/.config}/alice-guardian
+alice-installer restart
+
+# explicit workspace
+alice-installer restart --workspace-dir /opt/alice-media
+```
+
+Restart mode is non-interactive and reuses the same persisted artifact contract as update (`.env`, `docker-compose.yml`, optional `docker-compose.gpu.yml`). It executes exact `docker compose restart` semantics (no install fallback, no `down/up`, no `pull/up`).
 
 ## Manual install
 

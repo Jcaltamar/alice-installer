@@ -2,6 +2,12 @@ package compose
 
 import "context"
 
+// Call records a compose invocation for assertion in tests.
+type Call struct {
+	Files   []string
+	EnvFile string
+}
+
 // FakeComposeRunner is a test double for ComposeRunner.
 // Set the exported fields to control what each method returns.
 type FakeComposeRunner struct {
@@ -11,6 +17,7 @@ type FakeComposeRunner struct {
 	PullErr          error
 	UpProgressMsgs   []UpProgressMsg
 	UpErr            error
+	RestartErr       error
 	DownErr          error
 	// Healths is the slice of ServiceHealth returned by HealthStatus.
 	// Both Status (Health column) and State (lifecycle column) are honoured
@@ -18,6 +25,12 @@ type FakeComposeRunner struct {
 	// State-aware acceptance rule.
 	Healths   []ServiceHealth
 	HealthErr error
+
+	PullCalls []Call
+	UpCalls   []Call
+	RestartCalls []Call
+
+	CallOrder []string
 }
 
 // Version returns VersionVal, VersionErr.
@@ -26,7 +39,13 @@ func (f *FakeComposeRunner) Version(_ context.Context) (Version, error) {
 }
 
 // Pull sends PullProgressMsgs to the progress channel then returns PullErr.
-func (f *FakeComposeRunner) Pull(_ context.Context, _ []string, _ string, progress chan<- PullProgressMsg) error {
+func (f *FakeComposeRunner) Pull(_ context.Context, files []string, envFile string, progress chan<- PullProgressMsg) error {
+	f.PullCalls = append(f.PullCalls, Call{})
+	if len(f.PullCalls) > 0 {
+		last := len(f.PullCalls) - 1
+		f.PullCalls[last] = Call{Files: append([]string(nil), files...), EnvFile: envFile}
+	}
+	f.CallOrder = append(f.CallOrder, "pull")
 	for _, m := range f.PullProgressMsgs {
 		progress <- m
 	}
@@ -34,11 +53,28 @@ func (f *FakeComposeRunner) Pull(_ context.Context, _ []string, _ string, progre
 }
 
 // Up sends UpProgressMsgs to the progress channel then returns UpErr.
-func (f *FakeComposeRunner) Up(_ context.Context, _ []string, _ string, progress chan<- UpProgressMsg) error {
+func (f *FakeComposeRunner) Up(_ context.Context, files []string, envFile string, progress chan<- UpProgressMsg) error {
+	f.UpCalls = append(f.UpCalls, Call{})
+	if len(f.UpCalls) > 0 {
+		last := len(f.UpCalls) - 1
+		f.UpCalls[last] = Call{Files: append([]string(nil), files...), EnvFile: envFile}
+	}
+	f.CallOrder = append(f.CallOrder, "up")
 	for _, m := range f.UpProgressMsgs {
 		progress <- m
 	}
 	return f.UpErr
+}
+
+// Restart records call args and returns RestartErr.
+func (f *FakeComposeRunner) Restart(_ context.Context, files []string, envFile string) error {
+	f.RestartCalls = append(f.RestartCalls, Call{})
+	if len(f.RestartCalls) > 0 {
+		last := len(f.RestartCalls) - 1
+		f.RestartCalls[last] = Call{Files: append([]string(nil), files...), EnvFile: envFile}
+	}
+	f.CallOrder = append(f.CallOrder, "restart")
+	return f.RestartErr
 }
 
 // Down returns DownErr.

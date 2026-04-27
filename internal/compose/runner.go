@@ -68,6 +68,7 @@ type ComposeRunner interface {
 	Version(ctx context.Context) (Version, error)
 	Pull(ctx context.Context, files []string, envFile string, progress chan<- PullProgressMsg) error
 	Up(ctx context.Context, files []string, envFile string, progress chan<- UpProgressMsg) error
+	Restart(ctx context.Context, files []string, envFile string) error
 	Down(ctx context.Context, files []string, envFile string) error
 	HealthStatus(ctx context.Context, files []string, envFile string) ([]ServiceHealth, error)
 }
@@ -173,6 +174,16 @@ func (c *CLICompose) Up(ctx context.Context, files []string, envFile string, pro
 		func(_ string) {},
 		"docker", args...,
 	)
+}
+
+// Restart runs `docker compose restart` (one-shot).
+func (c *CLICompose) Restart(ctx context.Context, files []string, envFile string) error {
+	args := baseArgs(files, envFile, "restart")
+	_, _, err := c.runner.Run(ctx, "docker", args...)
+	if err != nil {
+		return fmt.Errorf("docker compose restart failed: %w", err)
+	}
+	return nil
 }
 
 // Down runs `docker compose down` (one-shot).
