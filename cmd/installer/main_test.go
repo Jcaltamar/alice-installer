@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/headless"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/restart"
-	"github.com/jcaltamar/alice-installer/internal/update"
 	"github.com/jcaltamar/alice-installer/internal/tui"
+	"github.com/jcaltamar/alice-installer/internal/update"
 )
 
 func TestParseCLI_CommandModeAndArgNormalization(t *testing.T) {
@@ -247,6 +248,62 @@ func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	}
 }
 
+func TestNewDependencies_WiresAsteriskInstallerOptionsAndAvailability(t *testing.T) {
+	restore := replaceAsteriskHostDetector(func() asterisk.HostDetector {
+		return &asterisk.FakeDetector{State: asterisk.SupportedHost(asterisk.PackageManagerAPT)}
+	})
+	t.Cleanup(restore)
+
+	deps := newDependencies(context.Background(), flags{
+		MediaDir:     "/opt/alice-media",
+		ConfigDir:    "/opt/alice-config",
+		EnvOutput:    "./.env",
+		WorkspaceDir: t.TempDir(),
+	})
+
+	if deps.AsteriskInstaller == nil {
+		t.Fatal("AsteriskInstaller should be wired for production CLI dependencies")
+	}
+	if deps.AsteriskAvailable == nil || !deps.AsteriskAvailable() {
+		t.Fatal("AsteriskAvailable should report true for supported Linux hosts")
+	}
+	if deps.AsteriskOptions.ConfigRoot != "/opt/alice-config/asterisk" {
+		t.Fatalf("AsteriskOptions.ConfigRoot = %q, want /opt/alice-config/asterisk", deps.AsteriskOptions.ConfigRoot)
+	}
+	if deps.AsteriskOptions.AMI.Username == "" || deps.AsteriskOptions.AMI.Password == "" {
+		t.Fatalf("AsteriskOptions should carry generated AMI credentials, got %#v", deps.AsteriskOptions.AMI)
+	}
+}
+
+func TestNewDependencies_HidesAsteriskWhenHostUnsupported(t *testing.T) {
+	restore := replaceAsteriskHostDetector(func() asterisk.HostDetector {
+		return &asterisk.FakeDetector{Err: asterisk.UnsupportedHostError{Reason: "unsupported Linux host: install apt, dnf, yum, or pacman before selecting Asterisk"}}
+	})
+	t.Cleanup(restore)
+
+	deps := newDependencies(context.Background(), flags{
+		MediaDir:     "/opt/alice-media",
+		ConfigDir:    "/opt/alice-config",
+		EnvOutput:    "./.env",
+		WorkspaceDir: t.TempDir(),
+	})
+
+	if deps.AsteriskAvailable == nil {
+		t.Fatal("AsteriskAvailable should be wired even when unsupported")
+	}
+	if deps.AsteriskAvailable() {
+		t.Fatal("AsteriskAvailable should report false for unsupported package-manager hosts")
+	}
+}
+
+func replaceAsteriskHostDetector(fn func() asterisk.HostDetector) func() {
+	previous := newAsteriskHostDetector
+	newAsteriskHostDetector = fn
+	return func() {
+		newAsteriskHostDetector = previous
+	}
+}
+
 // fakeDepsFactory returns a depsFactoryFunc that produces a tui.Dependencies
 // populated with fake implementations suitable for dry-run testing.
 func fakeDepsFactory() depsFactoryFunc {
@@ -263,7 +320,7 @@ func TestRun_VersionFlag(t *testing.T) {
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 
-	code := run([]string{"--version"}, &out, &errOut, nil)
+	code := runWithoutStaleDockerGroup([]string{"--version"}, &out, &errOut, nil)
 
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
@@ -301,7 +358,7 @@ func TestRun_DryRun_PrintsPreflightReport(t *testing.T) {
 	var errOut bytes.Buffer
 
 	fakeDeps := fakeDepsFactory()
-	code := run([]string{"--dry-run", "--media-dir", t.TempDir(), "--config-dir", t.TempDir()},
+	code := runWithoutStaleDockerGroup([]string{"--dry-run", "--media-dir", t.TempDir(), "--config-dir", t.TempDir()},
 		&out, &errOut, fakeDeps)
 
 	if code == 2 {
@@ -330,6 +387,19 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 	}
 }
 
+func runWithoutStaleDockerGroup(args []string, out, errOut io.Writer, factory depsFactoryFunc) int {
+	return runWithStaleCheck(
+		args,
+		out,
+		errOut,
+		factory,
+		func() (bootstrap.StaleGroupResult, error) {
+			return bootstrap.StaleGroupResult{Stale: false}, nil
+		},
+		nil,
+	)
+}
+
 // ---------------------------------------------------------------------------
 // Stale-group gate tests (Phase 4)
 // ---------------------------------------------------------------------------
@@ -353,7 +423,7 @@ func TestRunStaleGroupReexecSuccess(t *testing.T) {
 	code := runWithStaleCheck(
 		[]string{"--unattended", "--workspace-name=test"},
 		&out, &errOut,
-		nil,        // factory — should not be called
+		nil, // factory — should not be called
 		staleChecker,
 		reexecFn,
 	)

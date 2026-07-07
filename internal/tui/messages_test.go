@@ -32,6 +32,10 @@ func TestMessagesCompile(t *testing.T) {
 	// Env write
 	_ = EnvWrittenMsg{Path: "/tmp/test/.env"}
 
+	// Optional packages
+	_ = OptionalPackagesConfirmedMsg{Selected: map[OptionalPackage]bool{OptionalPackageAsterisk: true}}
+	_ = AsteriskSetupCompleteMsg{}
+
 	// Compose
 	_ = PullStartedMsg{}
 	_ = PullCompleteMsg{}

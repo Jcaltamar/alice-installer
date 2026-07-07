@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
 )
@@ -48,6 +49,15 @@ type WorkspaceEnteredMsg struct {
 }
 
 // ---------------------------------------------------------------------------
+// Optional package messages
+// ---------------------------------------------------------------------------
+
+// OptionalPackagesConfirmedMsg is emitted when the operator confirms optional packages.
+type OptionalPackagesConfirmedMsg struct {
+	Selected map[OptionalPackage]bool
+}
+
+// ---------------------------------------------------------------------------
 // Port scan messages
 // ---------------------------------------------------------------------------
 
@@ -85,6 +95,15 @@ type PortsConfirmedMsg struct {
 // EnvWrittenMsg is emitted after the .env file has been written successfully.
 type EnvWrittenMsg struct {
 	Path string // absolute path of the written file
+}
+
+// ---------------------------------------------------------------------------
+// Asterisk setup messages
+// ---------------------------------------------------------------------------
+
+// AsteriskSetupCompleteMsg is emitted when optional Asterisk host setup succeeds.
+type AsteriskSetupCompleteMsg struct {
+	Result asterisk.Result
 }
 
 // ---------------------------------------------------------------------------

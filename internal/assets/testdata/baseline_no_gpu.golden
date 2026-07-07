@@ -11,6 +11,13 @@ services:
         required: true
     environment:
       APIFACE: http://127.0.0.1:18080
+      ASTERISK_AMI_HOST: 127.0.0.1
+      ASTERISK_AMI_PASSWORD: ""
+      ASTERISK_AMI_PORT: "5038"
+      ASTERISK_AMI_USERNAME: ""
+      ASTERISK_CONFIG_DIR: /opt/alice-config/asterisk
+      ASTERISK_ENABLED: "false"
+      ASTERISK_INTEGRATION_ENV: /opt/alice-config/asterisk/integration.env
       DEBUG: "false"
       HOST_BACKEND: 127.0.0.1
       HOST_MQTT: 127.0.0.1
@@ -49,18 +56,15 @@ services:
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
-        bind:
-          create_host_path: true
+        bind: {}
       - type: bind
         source: /opt/alice-media
         target: /opt/alice-media
-        bind:
-          create_host_path: true
+        bind: {}
       - type: bind
         source: /opt/alice-config
         target: /opt/alice-config
-        bind:
-          create_host_path: true
+        bind: {}
       - type: volume
         source: alice-guardian
         target: /opt/alice-guardian

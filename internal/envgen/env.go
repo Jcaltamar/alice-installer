@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/secrets"
 )
@@ -34,6 +35,7 @@ type Input struct {
 	Ports            PortsConfig
 	GeneratePassword bool   // when true, calls PasswordGen; ignored if PasswordOverride != ""
 	PasswordOverride string // explicit override; wins over GeneratePassword
+	Asterisk         asterisk.AMIContract
 }
 
 // EnvTemplater renders .env.example bytes into a deployment-ready .env.
@@ -146,6 +148,9 @@ func (t *Templater) Render(template []byte, in Input) ([]byte, error) {
 	subs["MILVUS_PORT"] = fmt.Sprintf("%d", p.MilvusPort)
 	subs["MINIO_API_PORT"] = fmt.Sprintf("%d", p.MinioAPIPort)
 	subs["MINIO_CONSOLE_PORT"] = fmt.Sprintf("%d", p.MinioConsolePort)
+	for key, value := range asteriskEnvValues(in.Asterisk) {
+		subs[key] = value
+	}
 
 	// Process template line by line
 	lines := strings.Split(string(template), "\n")
@@ -196,4 +201,28 @@ func (t *Templater) Render(template []byte, in Input) ([]byte, error) {
 	}
 
 	return []byte(result), nil
+}
+
+func asteriskEnvValues(contract asterisk.AMIContract) map[string]string {
+	if !contract.Enabled {
+		return map[string]string{
+			"ASTERISK_ENABLED":         "false",
+			"ASTERISK_AMI_HOST":        asterisk.DefaultAMIHost,
+			"ASTERISK_AMI_PORT":        fmt.Sprintf("%d", asterisk.DefaultAMIPort),
+			"ASTERISK_AMI_USERNAME":    "",
+			"ASTERISK_AMI_PASSWORD":    "",
+			"ASTERISK_CONFIG_DIR":      asterisk.DefaultConfigRoot,
+			"ASTERISK_INTEGRATION_ENV": asterisk.DefaultConfigRoot + "/integration.env",
+		}
+	}
+	contract = asterisk.NormalizeContract(contract, contract.ConfigDir)
+	return map[string]string{
+		"ASTERISK_ENABLED":         fmt.Sprintf("%t", contract.Enabled),
+		"ASTERISK_AMI_HOST":        contract.Host,
+		"ASTERISK_AMI_PORT":        fmt.Sprintf("%d", contract.Port),
+		"ASTERISK_AMI_USERNAME":    contract.Username,
+		"ASTERISK_AMI_PASSWORD":    contract.Password,
+		"ASTERISK_CONFIG_DIR":      contract.ConfigDir,
+		"ASTERISK_INTEGRATION_ENV": contract.ConfigDir + "/integration.env",
+	}
 }

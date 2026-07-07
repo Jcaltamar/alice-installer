@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/secrets"
@@ -416,6 +417,68 @@ func TestTemplater_Render_WorkspaceSubstituted(t *testing.T) {
 	}
 
 	assertKeyValue(t, string(out), "WORKSPACE", "my-custom-workspace")
+}
+
+func TestTemplater_Render_AsteriskContractFromSharedInput(t *testing.T) {
+	tpl := newTemplater(secrets.FakeGenerator{Val: "pw"})
+	tmpl := []byte(strings.Join([]string{
+		"ASTERISK_ENABLED=false",
+		"ASTERISK_AMI_HOST=",
+		"ASTERISK_AMI_PORT=",
+		"ASTERISK_AMI_USERNAME=",
+		"ASTERISK_AMI_PASSWORD=",
+		"ASTERISK_CONFIG_DIR=",
+		"ASTERISK_INTEGRATION_ENV=",
+		"",
+	}, "\n"))
+	in := defaultInput()
+	in.Asterisk = asterisk.AMIContract{
+		Enabled:   true,
+		Host:      "127.0.0.1",
+		Port:      5038,
+		Username:  "alice-guardian",
+		Password:  "shared-secret",
+		ConfigDir: "/opt/alice-config/asterisk",
+	}
+
+	out, err := tpl.Render(tmpl, in)
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+
+	rendered := string(out)
+	assertKeyValue(t, rendered, "ASTERISK_ENABLED", "true")
+	assertKeyValue(t, rendered, "ASTERISK_AMI_HOST", "127.0.0.1")
+	assertKeyValue(t, rendered, "ASTERISK_AMI_PORT", "5038")
+	assertKeyValue(t, rendered, "ASTERISK_AMI_USERNAME", "alice-guardian")
+	assertKeyValue(t, rendered, "ASTERISK_AMI_PASSWORD", "shared-secret")
+	assertKeyValue(t, rendered, "ASTERISK_CONFIG_DIR", "/opt/alice-config/asterisk")
+	assertKeyValue(t, rendered, "ASTERISK_INTEGRATION_ENV", "/opt/alice-config/asterisk/integration.env")
+
+	integrationEnv := asterisk.RenderIntegrationEnv(in.Asterisk)
+	for _, want := range []string{
+		"ASTERISK_AMI_USERNAME=alice-guardian",
+		"ASTERISK_AMI_PASSWORD=shared-secret",
+		"ASTERISK_CONFIG_DIR=/opt/alice-config/asterisk",
+	} {
+		if !strings.Contains(integrationEnv, want) {
+			t.Fatalf("integration env should use same shared input, missing %q:\n%s", want, integrationEnv)
+		}
+	}
+}
+
+func TestTemplater_Render_AsteriskDisabledByDefault(t *testing.T) {
+	tpl := newTemplater(secrets.FakeGenerator{Val: "pw"})
+	tmpl := []byte("ASTERISK_ENABLED=true\nASTERISK_AMI_PASSWORD=should-clear\n")
+
+	out, err := tpl.Render(tmpl, defaultInput())
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+
+	rendered := string(out)
+	assertKeyValue(t, rendered, "ASTERISK_ENABLED", "false")
+	assertKeyValue(t, rendered, "ASTERISK_AMI_PASSWORD", "")
 }
 
 // ---------------------------------------------------------------------------

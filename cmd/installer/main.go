@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jcaltamar/alice-installer/internal/assets"
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
@@ -39,6 +40,9 @@ var version = "dev"
 var runHeadlessFn = headless.Run
 var runUpdateFn = update.Run
 var runRestartFn = restart.Run
+var newAsteriskHostDetector = func() asterisk.HostDetector {
+	return asterisk.HostEnvironmentDetector{}
+}
 
 // flags holds parsed command-line options.
 type flags struct {
@@ -50,11 +54,11 @@ type flags struct {
 	WorkspaceDir string // default: ${XDG_CONFIG_HOME:-$HOME/.config}/alice-guardian
 
 	// Headless / unattended mode
-	Unattended          bool   // --unattended: skip TUI, run sequentially
-	WorkspaceName       string // --workspace-name: WORKSPACE value in .env
-	AcceptAllBootstrap  bool   // --accept-all-bootstrap: auto-run bootstrap actions
-	Deploy              bool   // --deploy: run docker compose up after env-write
-	SkipPull            bool   // --skip-pull: skip docker compose pull (env-write only)
+	Unattended         bool   // --unattended: skip TUI, run sequentially
+	WorkspaceName      string // --workspace-name: WORKSPACE value in .env
+	AcceptAllBootstrap bool   // --accept-all-bootstrap: auto-run bootstrap actions
+	Deploy             bool   // --deploy: run docker compose up after env-write
+	SkipPull           bool   // --skip-pull: skip docker compose pull (env-write only)
 }
 
 type cliMode string
@@ -227,6 +231,7 @@ func parseFlags(args []string) (flags, error) {
 
 // newDependencies constructs all production implementations and returns a tui.Dependencies.
 func newDependencies(_ context.Context, f flags) tui.Dependencies {
+	ctx := context.Background()
 	th := theme.Default()
 	osGuard := platform.NewRuntimeOSGuard(nil)
 	archDetector := platform.NewRuntimeArchDetector(nil)
@@ -237,6 +242,11 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 	passwordGen := secrets.CryptoRandGenerator{}
 	templater := &envgen.Templater{PasswordGen: passwordGen}
 	writer := envgen.AtomicWriter{}
+	asteriskDetector := newAsteriskHostDetector()
+	asteriskHost, asteriskSupportErr := asteriskDetector.Detect(ctx)
+	asteriskSupported := asteriskSupportErr == nil && asteriskHost.Validate() == nil
+	asteriskDeps := asterisk.NewProductionDependencies(asteriskDetector, asteriskHost.PackageManager, nil)
+	asteriskOptions := newAsteriskOptions(f.ConfigDir, passwordGen)
 
 	coord := preflight.Coordinator{
 		OS:                osGuard,
@@ -271,6 +281,9 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		Envgen:               templater,
 		Writer:               writer,
 		Assets:               embeddedAssets,
+		AsteriskInstaller:    asterisk.NewInstaller(asteriskDeps),
+		AsteriskOptions:      asteriskOptions,
+		AsteriskAvailable:    func() bool { return asteriskSupported },
 		PreflightCoordinator: coord,
 		Executor:             tui.NewExecutor(),
 		Env:                  tui.DetectEnv(),
@@ -278,6 +291,23 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		ConfigDir:            f.ConfigDir,
 		WorkspaceDir:         f.WorkspaceDir,
 		RequiredTCPPorts:     defaultPorts,
+	}
+}
+
+func newAsteriskOptions(configDir string, passwordGen secrets.PasswordGenerator) asterisk.Options {
+	configRoot := filepath.Join(configDir, "asterisk")
+	password, err := passwordGen.Generate(32)
+	if err != nil {
+		password = ""
+	}
+	contract := asterisk.NormalizeContract(asterisk.AMIContract{
+		Enabled:  true,
+		Username: "alice_guardian_ami",
+		Password: password,
+	}, configRoot)
+	return asterisk.Options{
+		ConfigRoot: configRoot,
+		AMI:        contract,
 	}
 }
 

@@ -2,6 +2,7 @@ package assets_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/jcaltamar/alice-installer/internal/assets"
@@ -52,6 +53,43 @@ func TestEnvExample_NonEmpty(t *testing.T) {
 func TestEnvExample_ContainsWorkspace(t *testing.T) {
 	if !bytes.Contains(assets.EnvExample, []byte("WORKSPACE=")) {
 		t.Fatal("EnvExample does not contain WORKSPACE= key")
+	}
+}
+
+func TestEnvExample_ContainsDisabledAsteriskContract(t *testing.T) {
+	for _, want := range [][]byte{
+		[]byte("ASTERISK_ENABLED=false"),
+		[]byte("ASTERISK_AMI_HOST=127.0.0.1"),
+		[]byte("ASTERISK_AMI_PORT=5038"),
+		[]byte("ASTERISK_AMI_USERNAME="),
+		[]byte("ASTERISK_AMI_PASSWORD="),
+		[]byte("ASTERISK_CONFIG_DIR=/opt/alice-config/asterisk"),
+		[]byte("ASTERISK_INTEGRATION_ENV=/opt/alice-config/asterisk/integration.env"),
+	} {
+		if !bytes.Contains(assets.EnvExample, want) {
+			t.Fatalf("EnvExample missing %q", want)
+		}
+	}
+}
+
+func TestDockerComposeYAML_BackendAsteriskEnvPreservesSharedConfigMount(t *testing.T) {
+	compose := string(assets.DockerComposeYAML)
+	for _, want := range []string{
+		"- ASTERISK_ENABLED=${ASTERISK_ENABLED:-false}",
+		"- ASTERISK_AMI_HOST=${ASTERISK_AMI_HOST:-127.0.0.1}",
+		"- ASTERISK_AMI_PORT=${ASTERISK_AMI_PORT:-5038}",
+		"- ASTERISK_AMI_USERNAME=${ASTERISK_AMI_USERNAME:-}",
+		"- ASTERISK_AMI_PASSWORD=${ASTERISK_AMI_PASSWORD:-}",
+		"- ASTERISK_CONFIG_DIR=${ASTERISK_CONFIG_DIR:-/opt/alice-config/asterisk}",
+		"- ASTERISK_INTEGRATION_ENV=${ASTERISK_INTEGRATION_ENV:-/opt/alice-config/asterisk/integration.env}",
+		"- /opt/alice-config:/opt/alice-config",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml missing %q\n%s", want, compose)
+		}
+	}
+	if strings.Count(compose, "/opt/alice-config:/opt/alice-config") != 1 {
+		t.Fatalf("backend shared config mount should remain exactly once, got %d", strings.Count(compose, "/opt/alice-config:/opt/alice-config"))
 	}
 }
 

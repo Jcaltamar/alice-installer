@@ -159,8 +159,23 @@ func TestWorkspaceEnteredMsgTransitionsToPortScan(t *testing.T) {
 	m.state = StateWorkspaceInput
 	updated, _ := m.Update(WorkspaceEnteredMsg{Value: "my-site"})
 	m = updated.(Model)
+	if m.state != StateOptionalPackages {
+		t.Errorf("WorkspaceEnteredMsg → state = %v, want StateOptionalPackages", m.state)
+	}
+}
+
+func TestOptionalPackagesConfirmedMsgTransitionsToPortScan(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateOptionalPackages
+
+	updated, _ := m.Update(OptionalPackagesConfirmedMsg{Selected: map[OptionalPackage]bool{OptionalPackageAsterisk: true}})
+	m = updated.(Model)
+
 	if m.state != StatePortScan {
-		t.Errorf("WorkspaceEnteredMsg → state = %v, want StatePortScan", m.state)
+		t.Errorf("OptionalPackagesConfirmedMsg → state = %v, want StatePortScan", m.state)
+	}
+	if !m.optionalPackages[OptionalPackageAsterisk] {
+		t.Fatalf("model should carry selected Asterisk package, got %#v", m.optionalPackages)
 	}
 }
 
@@ -186,6 +201,22 @@ func TestEnvWrittenMsgTransitionsToPull(t *testing.T) {
 	}
 	if m.envPath != "/tmp/.env" {
 		t.Errorf("envPath = %q, want /tmp/.env", m.envPath)
+	}
+}
+
+func TestEnvWrittenMsgTransitionsToAsteriskSetupWhenSelected(t *testing.T) {
+	deps := buildTestDeps()
+	deps.AsteriskInstaller = &recordingAsteriskInstaller{}
+	deps.AsteriskOptions = asteriskTestOptions()
+	m := NewModel(deps)
+	m.state = StateEnvWrite
+	m.optionalPackages = map[OptionalPackage]bool{OptionalPackageAsterisk: true}
+
+	updated, _ := m.Update(EnvWrittenMsg{Path: "/tmp/.env"})
+	m = updated.(Model)
+
+	if m.state != StateAsteriskSetup {
+		t.Errorf("EnvWrittenMsg with Asterisk selected → state = %v, want StateAsteriskSetup", m.state)
 	}
 }
 

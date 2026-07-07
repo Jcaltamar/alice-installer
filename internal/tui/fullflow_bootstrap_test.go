@@ -225,13 +225,19 @@ func TestFullFlowBootstrapHappyPath(t *testing.T) {
 		t.Errorf("WorkspaceEnteredMsg.Value = %q, want bootstrap-site", wsMsg.Value)
 	}
 
-	// --- Step 11: Apply WorkspaceEnteredMsg → StatePortScan ---
+	// --- Step 11: Apply WorkspaceEnteredMsg → StateOptionalPackages ---
 	m, cmd = sendMsg(m, wsMsg)
-	if m.state != StatePortScan {
-		t.Fatalf("WorkspaceEnteredMsg → state = %v, want StatePortScan", m.state)
+	if m.state != StateOptionalPackages {
+		t.Fatalf("WorkspaceEnteredMsg → state = %v, want StateOptionalPackages", m.state)
 	}
 
-	// --- Step 12: Port scan → PortsConfirmedMsg → StateEnvWrite ---
+	// --- Step 12: Skip optional packages → StatePortScan ---
+	m, cmd = sendMsg(m, OptionalPackagesConfirmedMsg{Selected: map[OptionalPackage]bool{}})
+	if m.state != StatePortScan {
+		t.Fatalf("OptionalPackagesConfirmedMsg → state = %v, want StatePortScan", m.state)
+	}
+
+	// --- Step 13: Port scan → PortsConfirmedMsg → StateEnvWrite ---
 	scanMsg := drainCmd(cmd)
 	m, cmd = sendMsg(m, scanMsg)
 	confirmedMsg := drainCmd(cmd)
@@ -244,7 +250,7 @@ func TestFullFlowBootstrapHappyPath(t *testing.T) {
 		t.Fatalf("PortsConfirmedMsg → state = %v, want StateEnvWrite", m.state)
 	}
 
-	// --- Step 13: EnvWrite → EnvWrittenMsg → StatePull ---
+	// --- Step 14: EnvWrite → EnvWrittenMsg → StatePull ---
 	envMsg := drainCmd(cmd)
 	written, ok := envMsg.(EnvWrittenMsg)
 	if !ok {

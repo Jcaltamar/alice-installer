@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
@@ -19,16 +20,18 @@ import (
 type State int
 
 const (
-	StateSplash         State = iota
-	StatePreflight      State = iota
-	StateBootstrap      State = iota // auto-elevation: sits between preflight and workspace-input
-	StateWorkspaceInput State = iota
-	StatePortScan       State = iota
-	StateEnvWrite       State = iota
-	StatePull           State = iota
-	StateDeploy         State = iota
-	StateVerify         State = iota
-	StateResult         State = iota
+	StateSplash           State = iota
+	StatePreflight        State = iota
+	StateBootstrap        State = iota // auto-elevation: sits between preflight and workspace-input
+	StateWorkspaceInput   State = iota
+	StateOptionalPackages State = iota
+	StatePortScan         State = iota
+	StateEnvWrite         State = iota
+	StateAsteriskSetup    State = iota
+	StatePull             State = iota
+	StateDeploy           State = iota
+	StateVerify           State = iota
+	StateResult           State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -41,16 +44,19 @@ type TemplateAssets struct {
 // Dependencies holds all injectable dependencies for the root Model.
 // Every field is an interface so tests can inject fakes without globals.
 type Dependencies struct {
-	Theme   theme.Theme
-	OS      platform.OSGuard
-	Arch    platform.ArchDetector
-	GPU     platform.GPUDetector
-	Ports   ports.PortScanner
-	Docker  docker.DockerClient
-	Compose compose.ComposeRunner
-	Envgen  *envgen.Templater
-	Writer  envgen.FileWriter
-	Assets  TemplateAssets
+	Theme             theme.Theme
+	OS                platform.OSGuard
+	Arch              platform.ArchDetector
+	GPU               platform.GPUDetector
+	Ports             ports.PortScanner
+	Docker            docker.DockerClient
+	Compose           compose.ComposeRunner
+	Envgen            *envgen.Templater
+	Writer            envgen.FileWriter
+	Assets            TemplateAssets
+	AsteriskInstaller AsteriskInstaller
+	AsteriskOptions   asterisk.Options
+	AsteriskAvailable func() bool
 
 	PreflightCoordinator preflight.Coordinator
 
@@ -65,7 +71,7 @@ type Dependencies struct {
 	// Runtime config
 	MediaDir         string
 	ConfigDir        string
-	WorkspaceDir     string // default: ~/.config/alice-guardian — user-editable artifacts
+	WorkspaceDir     string         // default: ~/.config/alice-guardian — user-editable artifacts
 	RequiredTCPPorts map[string]int // env-key → default port
 	RequiredUDPPorts map[string]int // env-key → default UDP port
 }
@@ -78,23 +84,27 @@ type Model struct {
 	width, height int
 
 	// Sub-models (only the active one matters at any given time).
-	splash    SplashModel
-	preflight PreflightModel
-	bootstrap BootstrapModel
-	workspace WorkspaceInputModel
-	portscan  PortScanModel
-	envwrite  EnvWriteModel
-	pull      PullModel
-	deploy    DeployModel
-	verify    VerifyModel
-	result    ResultModel
+	splash                SplashModel
+	preflight             PreflightModel
+	bootstrap             BootstrapModel
+	workspace             WorkspaceInputModel
+	optionalPackagesModel OptionalPackagesModel
+	portscan              PortScanModel
+	envwrite              EnvWriteModel
+	asteriskSetup         AsteriskSetupModel
+	pull                  PullModel
+	deploy                DeployModel
+	verify                VerifyModel
+	result                ResultModel
 
 	// Accumulated state carried across sub-models.
-	workspaceName string
-	confirmedPorts map[string]int
-	envPath        string   // absolute path to the written .env
-	composeFiles   []string // computed once at env-write → pull transition
-	gpuDetected    bool
+	workspaceName    string
+	optionalPackages map[OptionalPackage]bool
+	asteriskOptions  asterisk.Options
+	confirmedPorts   map[string]int
+	envPath          string   // absolute path to the written .env
+	composeFiles     []string // computed once at env-write → pull transition
+	gpuDetected      bool
 
 	// attemptedActions tracks bootstrap Action IDs that have already been
 	// executed successfully in this session. Prevents bootstrap from looping
@@ -131,13 +141,14 @@ func NewModel(deps Dependencies) Model {
 	gpuDetected := gpuInfo.ToolkitInstalled
 
 	return Model{
-		deps:             deps,
-		state:            StateSplash,
-		gpuDetected:      gpuDetected,
-		attemptedActions: map[string]bool{},
-		splash:           NewSplashModel(deps.Theme),
-		preflight:        NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
-		workspace:        NewWorkspaceInputModel(deps.Theme),
+		deps:                  deps,
+		state:                 StateSplash,
+		gpuDetected:           gpuDetected,
+		attemptedActions:      map[string]bool{},
+		splash:                NewSplashModel(deps.Theme),
+		preflight:             NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
+		workspace:             NewWorkspaceInputModel(deps.Theme),
+		optionalPackagesModel: NewOptionalPackagesModel(deps.Theme, asteriskAvailable(deps)),
 		portscan: NewPortScanModel(
 			deps.Theme,
 			deps.Ports,
@@ -247,6 +258,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceEnteredMsg:
 		m.workspaceName = msg.Value
+		m.state = StateOptionalPackages
+		m.optionalPackagesModel = NewOptionalPackagesModel(m.deps.Theme, asteriskAvailable(m.deps))
+		return m, m.optionalPackagesModel.Init()
+
+	case OptionalPackagesConfirmedMsg:
+		m.optionalPackages = copyOptionalPackageMap(msg.Selected)
+		if !asteriskAvailable(m.deps) {
+			delete(m.optionalPackages, OptionalPackageAsterisk)
+		}
+		if m.optionalPackages[OptionalPackageAsterisk] {
+			opts := m.deps.AsteriskOptions
+			opts.Enabled = true
+			if opts.ConfigRoot == "" {
+				opts.ConfigRoot = asterisk.DefaultConfigRoot
+			}
+			opts.AMI = asterisk.NormalizeContract(opts.AMI, opts.ConfigRoot)
+			m.asteriskOptions = opts
+		} else {
+			m.asteriskOptions = asterisk.Options{Enabled: false}
+		}
 		m.state = StatePortScan
 		return m, m.portscan.Init()
 
@@ -259,6 +290,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Arch:             m.deps.Arch.Detect(),
 			Ports:            portsConfigFromMap(m.confirmedPorts),
 			GeneratePassword: true,
+		}
+		if m.optionalPackages[OptionalPackageAsterisk] {
+			envInput.Asterisk = m.asteriskOptions.AMI
 		}
 		workspaceDir := m.deps.WorkspaceDir
 		if workspaceDir == "" {
@@ -287,6 +321,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			filepath.Join(workspaceDir, "docker-compose.yml"),
 			filepath.Join(workspaceDir, "docker-compose.gpu.yml"),
 		)
+		if m.optionalPackages[OptionalPackageAsterisk] {
+			m.state = StateAsteriskSetup
+			m.asteriskSetup = NewAsteriskSetupModel(m.deps.Theme, m.deps.AsteriskInstaller, m.asteriskOptions)
+			return m, m.asteriskSetup.Init()
+		}
+		m.state = StatePull
+		m.pull = NewPullModel(m.deps.Theme, m.deps.Compose, m.composeFiles, m.envPath)
+		return m, m.pull.Init()
+
+	case AsteriskSetupCompleteMsg:
+		updated, cmd := m.asteriskSetup.Update(msg)
+		m.asteriskSetup = updated
+		return m, cmd
+
+	case PullStartedMsg:
 		m.state = StatePull
 		m.pull = NewPullModel(m.deps.Theme, m.deps.Compose, m.composeFiles, m.envPath)
 		return m, m.pull.Init()
@@ -340,6 +389,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd = m.workspace.Update(msg)
 		m.workspace = updated
 
+	case StateOptionalPackages:
+		var updated OptionalPackagesModel
+		updated, cmd = m.optionalPackagesModel.Update(msg)
+		m.optionalPackagesModel = updated
+
 	case StatePortScan:
 		var updated PortScanModel
 		updated, cmd = m.portscan.Update(msg)
@@ -349,6 +403,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var updated EnvWriteModel
 		updated, cmd = m.envwrite.Update(msg)
 		m.envwrite = updated
+
+	case StateAsteriskSetup:
+		var updated AsteriskSetupModel
+		updated, cmd = m.asteriskSetup.Update(msg)
+		m.asteriskSetup = updated
 
 	case StatePull:
 		var updated PullModel
@@ -374,6 +433,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func asteriskAvailable(deps Dependencies) bool {
+	if deps.AsteriskAvailable != nil {
+		return deps.AsteriskAvailable()
+	}
+	return deps.OS == nil || deps.OS.IsLinux()
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	// Terminal-too-small guard (REQ-TUI-6 — handled here for all states).
@@ -392,10 +458,14 @@ func (m Model) View() string {
 		return m.bootstrap.View()
 	case StateWorkspaceInput:
 		return m.workspace.View()
+	case StateOptionalPackages:
+		return m.optionalPackagesModel.View()
 	case StatePortScan:
 		return m.portscan.View()
 	case StateEnvWrite:
 		return m.envwrite.View()
+	case StateAsteriskSetup:
+		return m.asteriskSetup.View()
 	case StatePull:
 		return m.pull.View()
 	case StateDeploy:

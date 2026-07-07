@@ -13,6 +13,7 @@ package tui
 //   4. Final state is StateResult with success=true.
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -152,13 +153,19 @@ func TestFullFlowHappyPath(t *testing.T) {
 		t.Errorf("WorkspaceEnteredMsg.Value = %q, want mysite", wsMsg.Value)
 	}
 
-	// --- Step 7: Apply WorkspaceEnteredMsg → StatePortScan ---
+	// --- Step 7: Apply WorkspaceEnteredMsg → StateOptionalPackages ---
 	m, cmd = sendMsg(m, wsMsg)
-	if m.state != StatePortScan {
-		t.Fatalf("after WorkspaceEnteredMsg state = %v, want StatePortScan", m.state)
+	if m.state != StateOptionalPackages {
+		t.Fatalf("after WorkspaceEnteredMsg state = %v, want StateOptionalPackages", m.state)
 	}
 
-	// --- Step 8: Port scan runs → PortScanResultMsg → PortsConfirmedMsg (no conflicts) ---
+	// --- Step 8: Skip optional packages → StatePortScan ---
+	m, cmd = sendMsg(m, OptionalPackagesConfirmedMsg{Selected: map[OptionalPackage]bool{}})
+	if m.state != StatePortScan {
+		t.Fatalf("after OptionalPackagesConfirmedMsg state = %v, want StatePortScan", m.state)
+	}
+
+	// --- Step 9: Port scan runs → PortScanResultMsg → PortsConfirmedMsg (no conflicts) ---
 	scanMsg := drainCmd(cmd) // cmd = scanAll
 	m, cmd = sendMsg(m, scanMsg)
 	// FakePortScanner has no occupied ports, so PortScanResultMsg has no conflicts →
@@ -169,13 +176,13 @@ func TestFullFlowHappyPath(t *testing.T) {
 		t.Fatalf("PortScanResultMsg with no conflicts should produce PortsConfirmedMsg, got %T", confirmedMsg)
 	}
 
-	// --- Step 9: Apply PortsConfirmedMsg → StateEnvWrite ---
+	// --- Step 10: Apply PortsConfirmedMsg → StateEnvWrite ---
 	m, cmd = sendMsg(m, ports)
 	if m.state != StateEnvWrite {
 		t.Fatalf("after PortsConfirmedMsg state = %v, want StateEnvWrite", m.state)
 	}
 
-	// --- Step 10: EnvWrite runs → EnvWrittenMsg ---
+	// --- Step 11: EnvWrite runs → EnvWrittenMsg ---
 	envMsg := drainCmd(cmd)
 	written, ok := envMsg.(EnvWrittenMsg)
 	if !ok {
@@ -270,4 +277,193 @@ func TestFullFlowHappyPath(t *testing.T) {
 	if !strings.Contains(strings.ToLower(view), "complete") {
 		t.Errorf("result view should contain 'complete', got:\n%q", view)
 	}
+}
+
+func TestFullFlowSelectedAsteriskRunsSetupBeforePullAndDeploy(t *testing.T) {
+	fw := &envgen.FakeWriter{Written: make(map[string][]byte)}
+	runner := &compose.FakeComposeRunner{
+		VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"},
+		Healths: []compose.ServiceHealth{
+			{Service: "backend", Status: "healthy", State: "running"},
+		},
+	}
+	installer := &recordingAsteriskInstaller{}
+	deps := buildFullFlowDeps(fw, runner)
+	deps.AsteriskInstaller = installer
+	deps.AsteriskOptions = asteriskTestOptions()
+
+	m := NewModel(deps)
+	m, cmd := driveFullFlowToEnvWrite(t, m, "asterisk-site", map[OptionalPackage]bool{OptionalPackageAsterisk: true})
+
+	envMsg := drainCmd(cmd)
+	written, ok := envMsg.(EnvWrittenMsg)
+	if !ok {
+		t.Fatalf("EnvWrite cmd should produce EnvWrittenMsg, got %T", envMsg)
+	}
+	m, cmd = sendMsg(m, written)
+	if m.state != StateAsteriskSetup {
+		t.Fatalf("selected Asterisk should enter StateAsteriskSetup before pull, got %v", m.state)
+	}
+	if len(runner.CallOrder) != 0 {
+		t.Fatalf("compose must not run before Asterisk setup succeeds, got call order %v", runner.CallOrder)
+	}
+
+	setupMsg := drainCmd(cmd)
+	if _, ok := setupMsg.(AsteriskSetupCompleteMsg); !ok {
+		t.Fatalf("Asterisk setup cmd emitted %T, want AsteriskSetupCompleteMsg", setupMsg)
+	}
+	if installer.calls != 1 {
+		t.Fatalf("Asterisk installer calls = %d, want 1", installer.calls)
+	}
+
+	m, cmd = sendMsg(m, setupMsg)
+	pullStarted := drainCmd(cmd)
+	if _, ok := pullStarted.(PullStartedMsg); !ok {
+		t.Fatalf("Asterisk success should emit PullStartedMsg, got %T", pullStarted)
+	}
+	m, cmd = sendMsg(m, pullStarted.(PullStartedMsg))
+	if m.state != StatePull {
+		t.Fatalf("after PullStartedMsg state = %v, want StatePull", m.state)
+	}
+	_ = cmd
+	m, cmd = sendMsg(m, m.pull.runPull())
+	deployStarted := drainCmd(cmd)
+	if _, ok := deployStarted.(DeployStartedMsg); !ok {
+		t.Fatalf("pull complete should emit DeployStartedMsg, got %T", deployStarted)
+	}
+	if len(runner.CallOrder) != 1 || runner.CallOrder[0] != "pull" {
+		t.Fatalf("compose call order after pull = %v, want [pull]", runner.CallOrder)
+	}
+}
+
+func TestFullFlowSelectedAsteriskFailureStopsBeforeDeploy(t *testing.T) {
+	fw := &envgen.FakeWriter{Written: make(map[string][]byte)}
+	runner := &compose.FakeComposeRunner{VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"}}
+	installer := &recordingAsteriskInstaller{err: errors.New("partial install verification failed")}
+	deps := buildFullFlowDeps(fw, runner)
+	deps.AsteriskInstaller = installer
+	deps.AsteriskOptions = asteriskTestOptions()
+
+	m := NewModel(deps)
+	m, cmd := driveFullFlowToEnvWrite(t, m, "asterisk-failure", map[OptionalPackage]bool{OptionalPackageAsterisk: true})
+
+	envMsg := drainCmd(cmd)
+	written, ok := envMsg.(EnvWrittenMsg)
+	if !ok {
+		t.Fatalf("EnvWrite cmd should produce EnvWrittenMsg, got %T", envMsg)
+	}
+	m, cmd = sendMsg(m, written)
+	if m.state != StateAsteriskSetup {
+		t.Fatalf("selected Asterisk should enter StateAsteriskSetup, got %v", m.state)
+	}
+
+	failureMsg := drainCmd(cmd)
+	failure, ok := failureMsg.(InstallFailureMsg)
+	if !ok {
+		t.Fatalf("Asterisk setup failure emitted %T, want InstallFailureMsg", failureMsg)
+	}
+	if failure.Stage != "asterisk-setup" {
+		t.Fatalf("failure stage = %q, want asterisk-setup", failure.Stage)
+	}
+	m, _ = sendMsg(m, failure)
+	if m.state != StateResult || m.result.success {
+		t.Fatalf("Asterisk failure should end in failed result, state=%v success=%v", m.state, m.result.success)
+	}
+	if len(runner.CallOrder) != 0 {
+		t.Fatalf("compose pull/deploy must not run after Asterisk failure, got %v", runner.CallOrder)
+	}
+}
+
+func TestFullFlowUnsupportedAsteriskHostSkipsOptionAndKeepsBaseInstallUsable(t *testing.T) {
+	fw := &envgen.FakeWriter{Written: make(map[string][]byte)}
+	runner := &compose.FakeComposeRunner{
+		VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"},
+		Healths: []compose.ServiceHealth{
+			{Service: "backend", Status: "healthy", State: "running"},
+		},
+	}
+	deps := buildFullFlowDeps(fw, runner)
+	deps.AsteriskAvailable = func() bool { return false }
+	installer := &recordingAsteriskInstaller{}
+	deps.AsteriskInstaller = installer
+	m := NewModel(deps)
+
+	m, cmd := driveFullFlowToOptionalPackages(t, m, "unsupported-host")
+	if strings.Contains(m.optionalPackagesModel.View(), "Asterisk SIP Audio Server") {
+		t.Fatalf("unsupported host should hide Asterisk option:\n%s", m.optionalPackagesModel.View())
+	}
+	m, cmd = sendMsg(m, OptionalPackagesConfirmedMsg{Selected: map[OptionalPackage]bool{OptionalPackageAsterisk: true}})
+	if m.optionalPackages[OptionalPackageAsterisk] {
+		t.Fatalf("hidden Asterisk option must not be accepted as selected: %#v", m.optionalPackages)
+	}
+	if m.state != StatePortScan {
+		t.Fatalf("unsupported host should still continue base install, got state %v", m.state)
+	}
+	if installer.calls != 0 {
+		t.Fatalf("Asterisk installer should not run on unsupported host, calls=%d", installer.calls)
+	}
+	_ = cmd
+}
+
+func driveFullFlowToOptionalPackages(t *testing.T, m Model, workspace string) (Model, tea.Cmd) {
+	t.Helper()
+
+	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := drainCmd(cmd)
+	started, ok := msg.(PreflightStartedMsg)
+	if !ok {
+		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
+	}
+	m, cmd = sendMsg(m, started)
+	preflightResultMsg := drainCmd(cmd)
+	m, cmd = sendMsg(m, preflightResultMsg)
+	_ = cmd
+	m, cmd = sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	passedMsg := drainCmd(cmd)
+	passed, ok := passedMsg.(PreflightPassedMsg)
+	if !ok {
+		t.Fatalf("Enter on passing preflight should produce PreflightPassedMsg, got %T", passedMsg)
+	}
+	m, cmd = sendMsg(m, passed)
+	if m.state != StateWorkspaceInput {
+		t.Fatalf("after PreflightPassedMsg state = %v, want StateWorkspaceInput", m.state)
+	}
+	_ = cmd
+
+	for _, ch := range workspace {
+		m, _ = sendMsg(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m, cmd = sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	enteredMsg := drainCmd(cmd)
+	wsMsg, ok := enteredMsg.(WorkspaceEnteredMsg)
+	if !ok {
+		t.Fatalf("Enter after workspace text should produce WorkspaceEnteredMsg, got %T", enteredMsg)
+	}
+	m, cmd = sendMsg(m, wsMsg)
+	if m.state != StateOptionalPackages {
+		t.Fatalf("WorkspaceEnteredMsg → state = %v, want StateOptionalPackages", m.state)
+	}
+	return m, cmd
+}
+
+func driveFullFlowToEnvWrite(t *testing.T, m Model, workspace string, selected map[OptionalPackage]bool) (Model, tea.Cmd) {
+	t.Helper()
+
+	m, cmd := driveFullFlowToOptionalPackages(t, m, workspace)
+	m, cmd = sendMsg(m, OptionalPackagesConfirmedMsg{Selected: selected})
+	if m.state != StatePortScan {
+		t.Fatalf("OptionalPackagesConfirmedMsg → state = %v, want StatePortScan", m.state)
+	}
+	scanMsg := drainCmd(cmd)
+	m, cmd = sendMsg(m, scanMsg)
+	confirmedMsg := drainCmd(cmd)
+	ports, ok := confirmedMsg.(PortsConfirmedMsg)
+	if !ok {
+		t.Fatalf("PortScanResultMsg with no conflicts should produce PortsConfirmedMsg, got %T", confirmedMsg)
+	}
+	m, cmd = sendMsg(m, ports)
+	if m.state != StateEnvWrite {
+		t.Fatalf("after PortsConfirmedMsg state = %v, want StateEnvWrite", m.state)
+	}
+	return m, cmd
 }
