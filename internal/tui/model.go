@@ -300,6 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DetectionCompletedMsg:
 		m.state = StateContextMenu
 		m.contextMenu = NewContextMenuModel(m.deps.Theme, msg.Detection)
+		m.contextMenu.migrationAvailable = hasMigrationCapability(m.deps)
 		return m, nil
 
 	case ContextActionSelectedMsg:
@@ -321,7 +322,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
 			return m, nil
 		case ContextActionMigration:
-			if m.deps.LegacyBackupAction == nil {
+			if !hasMigrationCapability(m.deps) {
 				m.state = StateBlockedOperation
 				m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
 				return m, nil
@@ -813,4 +814,8 @@ func (m Model) View() string {
 	default:
 		return m.deps.Theme.TextMuted.Render("Loading…")
 	}
+}
+
+func hasMigrationCapability(deps Dependencies) bool {
+	return deps.LegacyBackupAction != nil && deps.LegacyRestoreAction != nil && deps.MigrationHandoff != nil
 }

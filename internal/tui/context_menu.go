@@ -44,10 +44,11 @@ type LegacyBackupAction interface {
 }
 
 type ContextMenuModel struct {
-	theme     theme.Theme
-	detection installation.Detection
-	actions   []ContextAction
-	cursor    int
+	theme              theme.Theme
+	detection          installation.Detection
+	actions            []ContextAction
+	cursor             int
+	migrationAvailable bool
 }
 
 func NewContextMenuModel(th theme.Theme, detection installation.Detection) ContextMenuModel {
@@ -108,7 +109,7 @@ func (m ContextMenuModel) View() string {
 				prefix = "> "
 			}
 			label := contextActionLabel(action)
-			if action == ContextActionUninstall || action == ContextActionMigration {
+			if action == ContextActionUninstall || action == ContextActionMigration && !m.migrationAvailable {
 				label += " (not available in this version)"
 			}
 			b.WriteString(prefix + label + "\n")

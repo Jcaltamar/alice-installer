@@ -40,7 +40,7 @@ func TestContextMenuActionMatrix(t *testing.T) {
 		contains string
 	}{
 		{"not installed", installation.StateNotInstalled, []ContextAction{ContextActionInstall}, "Install"},
-		{"current", installation.StateCurrent, []ContextAction{ContextActionUpdate, ContextActionUninstall}, "Uninstall"},
+		{"current", installation.StateCurrent, []ContextAction{ContextActionUpdate, ContextActionUninstall}, "Uninstall (not available in this version)"},
 		{"legacy", installation.StateLegacyPM2, []ContextAction{ContextActionMigration}, "Migration"},
 		{"conflict", installation.StateConflict, nil, "cannot safely choose"},
 		{"unknown", installation.StateUnknown, nil, "cannot safely choose"},
@@ -157,6 +157,66 @@ func TestBlockedOperationReturnsToMenuWithoutExecuting(t *testing.T) {
 	m = updated.(Model)
 	if m.state != StateContextMenu {
 		t.Fatalf("dismissed state = %v", m.state)
+	}
+}
+
+func TestMigrationAvailabilityReflectsExecutableDependencies(t *testing.T) {
+	detection := installation.Detection{
+		State: installation.StateLegacyPM2,
+		Evidence: []installation.Evidence{{
+			Kind: installation.EvidencePM2AliceProcess,
+		}},
+	}
+	tests := []struct {
+		name          string
+		configure     func(*Dependencies)
+		wantAvailable bool
+	}{
+		{
+			name: "complete migration capability",
+			configure: func(deps *Dependencies) {
+				deps.LegacyBackupAction = &fakeLegacyBackupAction{}
+				deps.LegacyRestoreAction = &fakeLegacyRestoreAction{}
+				deps.MigrationHandoff = &fakeMigrationHandoff{}
+			},
+			wantAvailable: true,
+		},
+		{
+			name: "incomplete migration capability",
+			configure: func(deps *Dependencies) {
+				deps.LegacyBackupAction = &fakeLegacyBackupAction{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := buildTestDeps()
+			tt.configure(&deps)
+			m := NewModel(deps)
+			updated, _ := m.Update(DetectionCompletedMsg{Detection: detection})
+			m = updated.(Model)
+
+			view := m.View()
+			if strings.Contains(view, "Migration (not available in this version)") == tt.wantAvailable {
+				t.Fatalf("migration availability label mismatch: %q", view)
+			}
+			if !strings.Contains(view, "Configured legacy PM2 deployment found") {
+				t.Fatalf("detection evidence missing from migration menu: %q", view)
+			}
+
+			updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
+			m = updated.(Model)
+			if tt.wantAvailable {
+				if m.state != StateBackupPreflight || cmd == nil {
+					t.Fatalf("available migration state/cmd = %v/%v", m.state, cmd)
+				}
+				return
+			}
+			if m.state != StateBlockedOperation || cmd != nil {
+				t.Fatalf("incomplete migration state/cmd = %v/%v", m.state, cmd)
+			}
+		})
 	}
 }
 
