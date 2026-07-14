@@ -198,6 +198,9 @@ func TestComposeRender(t *testing.T) {
 				t.Fatalf("expected non-zero exit but got success; output:\n%s", out)
 			}
 
+			// Compose versions disagree on whether to render this implicit bind default.
+			out = bytes.ReplaceAll(out, []byte("        bind:\n          create_host_path: true\n"), []byte("        bind: {}\n"))
+
 			rendered := string(out)
 
 			for _, want := range tt.wantContains {
