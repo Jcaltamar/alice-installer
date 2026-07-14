@@ -17,6 +17,7 @@ type fakeLegacyBackupAction struct {
 	runCalls       int
 	preflightErr   error
 	result         migration.BackupResult
+	requests       []migration.BackupRequest
 }
 
 type fakeMigrationAuthenticator struct{ err error }
@@ -25,8 +26,9 @@ func (a fakeMigrationAuthenticator) Authenticate() tea.Cmd {
 	return func() tea.Msg { return MigrationAuthenticationCompletedMsg{Err: a.err} }
 }
 
-func (a *fakeLegacyBackupAction) Preflight(context.Context, migration.BackupRequest) (migration.BackupPlan, error) {
+func (a *fakeLegacyBackupAction) Preflight(_ context.Context, request migration.BackupRequest) (migration.BackupPlan, error) {
 	a.preflightCalls++
+	a.requests = append(a.requests, request)
 	return migration.BackupPlan{}, a.preflightErr
 }
 func (a *fakeLegacyBackupAction) Run(context.Context, migration.BackupPlan) migration.BackupResult {
@@ -48,8 +50,18 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 
 	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
 	m = updated.(Model)
-	if m.state != StateMigrationAuth || cmd == nil || action.preflightCalls != 0 || action.runCalls != 0 {
+	if m.state != StateMigrationEnv || cmd != nil || action.preflightCalls != 0 || action.runCalls != 0 {
 		t.Fatalf("state/cmd/run = %v/%v/%d", m.state, cmd, action.runCalls)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("environment choice must emit a typed selection")
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationAuth || cmd == nil || m.migrationEnv != migration.EnvironmentDevelopment {
+		t.Fatalf("environment selection state/cmd/environment = %v/%v/%q", m.state, cmd, m.migrationEnv)
 	}
 	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
@@ -58,7 +70,7 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 	}
 	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
-	if m.state != StateBackupConfirm || action.runCalls != 0 {
+	if m.state != StateBackupConfirm || action.runCalls != 0 || len(action.requests) != 1 || action.requests[0].ConfigEnvironment != "development" {
 		t.Fatalf("preflight must only review; state/run = %v/%d", m.state, action.runCalls)
 	}
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -170,6 +182,8 @@ func TestMigrationAuthenticationFailureBlocksBeforePreflight(t *testing.T) {
 			m.contextMenu = NewContextMenuModel(deps.Theme, installation.Detection{State: installation.StateLegacyPM2})
 
 			updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
+			m = updated.(Model)
+			updated, cmd = m.Update(MigrationEnvironmentSelectedMsg{Environment: migration.EnvironmentProduction})
 			m = updated.(Model)
 			updated, cmd = m.Update(cmd())
 			m = updated.(Model)

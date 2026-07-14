@@ -42,6 +42,7 @@ const (
 	StateUpdating            State = iota
 	StateBlockedOperation    State = iota
 	StateActionResult        State = iota
+	StateMigrationEnv        State = iota
 	StateMigrationAuth       State = iota
 	StateMigrationAuthFailed State = iota
 	StateBackupPreflight     State = iota
@@ -130,6 +131,7 @@ type Model struct {
 	contextMenu           ContextMenuModel
 	blockedOperation      blockedOperationModel
 	actionResult          actionResultModel
+	migrationEnvChoice    migrationEnvironmentModel
 	backupPlan            migration.BackupPlan
 	backupResult          migration.BackupResult
 	backupCancel          context.CancelFunc
@@ -148,6 +150,7 @@ type Model struct {
 	composeFiles     []string // computed once at env-write → pull transition
 	gpuDetected      bool
 	migrationPending bool
+	migrationEnv     migration.EnvironmentName
 
 	// attemptedActions tracks bootstrap Action IDs that have already been
 	// executed successfully in this session. Prevents bootstrap from looping
@@ -331,9 +334,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
 				return m, nil
 			}
-			m.state = StateMigrationAuth
-			return m, m.deps.MigrationAuthenticator.Authenticate()
+			m.state = StateMigrationEnv
+			m.migrationEnvChoice = migrationEnvironmentModel{theme: m.deps.Theme}
+			return m, nil
 		}
+
+	case MigrationEnvironmentSelectedMsg:
+		if m.state != StateMigrationEnv || msg.Environment != migration.EnvironmentDevelopment && msg.Environment != migration.EnvironmentProduction {
+			return m, nil
+		}
+		m.migrationEnv = msg.Environment
+		m.state = StateMigrationAuth
+		return m, m.deps.MigrationAuthenticator.Authenticate()
 
 	case MigrationAuthenticationCompletedMsg:
 		if m.state != StateMigrationAuth {
@@ -345,7 +357,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.state = StateBackupPreflight
 		return m, func() tea.Msg {
-			plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), m.deps.LegacyBackupRequest)
+			request := m.deps.LegacyBackupRequest
+			request.ConfigEnvironment = string(m.migrationEnv)
+			plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), request)
 			return BackupPreflightCompletedMsg{Plan: plan, Err: err}
 		}
 
@@ -667,6 +681,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd = m.blockedOperation.Update(msg)
 		m.blockedOperation = updated
 
+	case StateMigrationEnv:
+		var updated migrationEnvironmentModel
+		updated, cmd = m.migrationEnvChoice.Update(msg)
+		m.migrationEnvChoice = updated
+
 	case StatePreflight:
 		var updated PreflightModel
 		updated, cmd = m.preflight.Update(msg)
@@ -779,6 +798,8 @@ func (m Model) View() string {
 		return m.blockedOperation.View()
 	case StateActionResult:
 		return m.actionResult.View()
+	case StateMigrationEnv:
+		return m.migrationEnvChoice.View()
 	case StateMigrationAuth:
 		return m.deps.Theme.TextMuted.Render("Requesting migration authorization in the terminal…")
 	case StateMigrationAuthFailed:

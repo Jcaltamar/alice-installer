@@ -21,7 +21,6 @@ type configValue struct {
 	fallback *configValue
 }
 type configObject map[string]configValue
-type configRoot map[string]configObject
 
 type tokenKind uint8
 
@@ -44,7 +43,7 @@ type parser struct {
 	at     int
 }
 
-func parseConfig(source []byte) (configRoot, error) {
+func parseConfig(source []byte, selected EnvironmentName) (configObject, error) {
 	tokens, err := lex(source)
 	if err != nil {
 		return nil, configError()
@@ -53,46 +52,37 @@ func parseConfig(source []byte) (configRoot, error) {
 	if !p.takeIdentifier("module") || !p.takePunct(".") || !p.takeIdentifier("exports") || !p.takePunct("=") {
 		return nil, configError()
 	}
-	root, err := p.object()
-	if err != nil || !p.takePunct(";") || p.current().kind != tokenEOF || !validConfigShape(root) {
+	fields, err := p.object(selected)
+	if err != nil || !p.takePunct(";") || p.current().kind != tokenEOF || fields == nil {
 		return nil, configError()
 	}
-	return root, nil
-}
-func validConfigShape(root configRoot) bool {
-	for environment, fields := range root {
-		if environment != string(EnvironmentProduction) && environment != string(EnvironmentDevelopment) && environment != "test" {
-			return false
-		}
-		for name := range fields {
-			switch name {
-			case "dialect", "database", "username", "password", "host", "port":
-			default:
-				return false
-			}
-		}
-	}
-	return true
+	return fields, nil
 }
 
-func (p *parser) object() (configRoot, error) {
+func (p *parser) object(selected EnvironmentName) (configObject, error) {
 	if !p.takePunct("{") {
 		return nil, configError()
 	}
-	result := configRoot{}
+	seen := map[string]bool{}
+	var selectedFields configObject
 	for !p.takePunct("}") {
 		key, ok := p.key()
 		if !ok || !p.takePunct(":") {
 			return nil, configError()
 		}
-		if _, found := result[key]; found {
+		if seen[key] {
 			return nil, configError()
 		}
-		fields, err := p.fields()
-		if err != nil {
+		seen[key] = true
+		if key == string(selected) {
+			fields, err := p.fields()
+			if err != nil {
+				return nil, err
+			}
+			selectedFields = fields
+		} else if err := p.skipStaticValue(); err != nil {
 			return nil, err
 		}
-		result[key] = fields
 		if p.takePunct("}") {
 			break
 		}
@@ -100,7 +90,7 @@ func (p *parser) object() (configRoot, error) {
 			return nil, configError()
 		}
 	}
-	return result, nil
+	return selectedFields, nil
 }
 func (p *parser) fields() (configObject, error) {
 	if !p.takePunct("{") {
@@ -115,11 +105,15 @@ func (p *parser) fields() (configObject, error) {
 		if _, found := result[key]; found {
 			return nil, configError()
 		}
-		value, err := p.value()
-		if err != nil {
+		if isRequiredField(key) {
+			value, err := p.value()
+			if err != nil {
+				return nil, err
+			}
+			result[key] = value
+		} else if err := p.skipStaticValue(); err != nil {
 			return nil, err
 		}
-		result[key] = value
 		if p.takePunct("}") {
 			break
 		}
@@ -128,6 +122,61 @@ func (p *parser) fields() (configObject, error) {
 		}
 	}
 	return result, nil
+}
+func isRequiredField(name string) bool {
+	switch name {
+	case "dialect", "database", "username", "password", "host", "port":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *parser) skipStaticValue() error {
+	current := p.current()
+	if current.kind == tokenString || current.kind == tokenNumber || current.kind == tokenIdentifier && (current.text == "true" || current.text == "false" || current.text == "null") {
+		p.at++
+		return nil
+	}
+	if current.kind == tokenIdentifier && current.text == "process" {
+		_, err := p.value()
+		return err
+	}
+	if p.takePunct("{") {
+		seen := map[string]bool{}
+		for !p.takePunct("}") {
+			key, ok := p.key()
+			if !ok || seen[key] || !p.takePunct(":") {
+				return configError()
+			}
+			seen[key] = true
+			if err := p.skipStaticValue(); err != nil {
+				return err
+			}
+			if p.takePunct("}") {
+				return nil
+			}
+			if !p.takePunct(",") {
+				return configError()
+			}
+		}
+		return nil
+	}
+	if p.takePunct("[") {
+		for !p.takePunct("]") {
+			if err := p.skipStaticValue(); err != nil {
+				return err
+			}
+			if p.takePunct("]") {
+				return nil
+			}
+			if !p.takePunct(",") {
+				return configError()
+			}
+		}
+		return nil
+	}
+	return configError()
 }
 func (p *parser) key() (string, bool) {
 	current := p.current()
@@ -304,7 +353,7 @@ func lex(source []byte) ([]token, error) {
 			i += 2
 			continue
 		}
-		if strings.ContainsRune("{}:,.=;", rune(source[i])) {
+		if strings.ContainsRune("{}[]:,.=;", rune(source[i])) {
 			tokens = append(tokens, token{tokenPunct, string(source[i])})
 			i++
 			continue

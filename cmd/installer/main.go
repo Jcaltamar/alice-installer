@@ -342,7 +342,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 				GOOS:      runtime.GOOS,
 				Timeout:   30 * time.Minute,
 			}
-			deps.LegacyBackupRequest = migration.BackupRequest{Destination: backupRoot, ConfigEnvironment: string(migration.EnvironmentProduction)}
+			deps.LegacyBackupRequest = migration.BackupRequest{Destination: backupRoot}
 			coordinator, err := migration.NewProductionRestoreCoordinator(migration.ProductionRestoreDependencies{
 				Compose: composeRunner, OperationID: newRestoreOperationID,
 			})

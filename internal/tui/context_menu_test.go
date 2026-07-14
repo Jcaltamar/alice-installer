@@ -209,7 +209,7 @@ func TestMigrationAvailabilityReflectsExecutableDependencies(t *testing.T) {
 			updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
 			m = updated.(Model)
 			if tt.wantAvailable {
-				if m.state != StateMigrationAuth || cmd == nil {
+				if m.state != StateMigrationEnv || cmd != nil {
 					t.Fatalf("available migration state/cmd = %v/%v", m.state, cmd)
 				}
 				return

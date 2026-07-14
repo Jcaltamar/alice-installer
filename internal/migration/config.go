@@ -109,13 +109,9 @@ func (r Resolver) Resolve(ctx context.Context, request ConfigRequest) (ResolvedC
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	root, err := parseConfig(data)
+	fields, err := parseConfig(data, selected)
 	if err != nil {
 		return ResolvedConfig{}, err
-	}
-	fields, ok := root[string(selected)]
-	if !ok {
-		return ResolvedConfig{}, configError()
 	}
 	env := r.Environment
 	if env == nil {
