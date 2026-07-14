@@ -178,6 +178,7 @@ func TestMigrationAvailabilityReflectsExecutableDependencies(t *testing.T) {
 				deps.LegacyBackupAction = &fakeLegacyBackupAction{}
 				deps.LegacyRestoreAction = &fakeLegacyRestoreAction{}
 				deps.MigrationHandoff = &fakeMigrationHandoff{}
+				deps.MigrationAuthenticator = fakeMigrationAuthenticator{}
 			},
 			wantAvailable: true,
 		},
@@ -208,7 +209,7 @@ func TestMigrationAvailabilityReflectsExecutableDependencies(t *testing.T) {
 			updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
 			m = updated.(Model)
 			if tt.wantAvailable {
-				if m.state != StateBackupPreflight || cmd == nil {
+				if m.state != StateMigrationAuth || cmd == nil {
 					t.Fatalf("available migration state/cmd = %v/%v", m.state, cmd)
 				}
 				return

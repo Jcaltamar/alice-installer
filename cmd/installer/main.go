@@ -329,10 +329,13 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 			backupRoot := "/opt/alice/backups/"
 			executor := migration.OSBinaryExecutor{}
 			pm2Runner := &platform.OSCommandRunner{}
+			deps.MigrationAuthenticator = tui.SudoMigrationAuthenticator{}
 			deps.LegacyBackupAction = migration.BackupAction{
 				Resolver:  migration.Resolver{},
 				Inspector: migration.InspectorDiscovery{Inspector: migration.DockerCLIInspector{Runner: &platform.OSCommandRunner{}}},
-				Store:     migration.OSDestinationStore{Privilege: &platform.OSCommandRunner{}},
+				Store: migration.OSDestinationStore{Privilege: migration.SudoDestinationPrivilege{
+					Runner: &platform.OSCommandRunner{},
+				}},
 				Executor:  executor,
 				Transport: migration.CredentialTransport{},
 				Validator: migration.PG11ArchiveValidator{Executor: executor, Timeout: 30 * time.Minute},

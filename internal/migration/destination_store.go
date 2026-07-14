@@ -24,9 +24,32 @@ var (
 // preflight check; writes still handle ENOSPC as a destination failure.
 type SpaceChecker interface{ AvailableBytes(string) (uint64, error) }
 
-// PrivilegeRunner is the repository command-runner seam used to request elevation.
-type PrivilegeRunner interface {
+type PrivilegeCommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, []byte, error)
+}
+
+type DestinationPrivilege interface {
+	Prepare(context.Context, string, int, int) error
+}
+
+type SudoDestinationPrivilege struct{ Runner PrivilegeCommandRunner }
+
+func (p SudoDestinationPrivilege) Prepare(ctx context.Context, directory string, uid, gid int) error {
+	if p.Runner == nil {
+		return ErrDestinationFailure
+	}
+	owner := fmt.Sprintf("%d:%d", uid, gid)
+	commands := [][]string{
+		{"-n", "mkdir", "-p", directory},
+		{"-n", "chown", "-R", owner, directory},
+		{"-n", "chmod", "700", directory},
+	}
+	for _, args := range commands {
+		if _, _, err := p.Runner.Run(ctx, "sudo", args...); err != nil {
+			return ErrDestinationFailure
+		}
+	}
+	return nil
 }
 
 type DestinationRequest struct {
@@ -57,7 +80,7 @@ type StagedArtifact interface {
 type OSDestinationStore struct {
 	Space            SpaceChecker
 	MinimumFreeBytes uint64
-	Privilege        PrivilegeRunner
+	Privilege        DestinationPrivilege
 }
 
 func (s OSDestinationStore) Preflight(ctx context.Context, request DestinationRequest) (DestinationPlan, error) {
@@ -179,18 +202,7 @@ func (a *osStagedArtifact) Cleanup() error {
 }
 
 func (s OSDestinationStore) elevatedPrepare(ctx context.Context, directory string) error {
-	uid, gid := fmt.Sprintf("%d", os.Geteuid()), fmt.Sprintf("%d", os.Getegid())
-	commands := [][]string{
-		{"mkdir", "-p", directory},
-		{"chown", "-R", uid + ":" + gid, directory},
-		{"chmod", "700", directory},
-	}
-	for _, args := range commands {
-		if _, _, err := s.Privilege.Run(ctx, "sudo", args...); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.Privilege.Prepare(ctx, directory, os.Geteuid(), os.Getegid())
 }
 
 func stagingName() (string, error) {

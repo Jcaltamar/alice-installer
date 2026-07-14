@@ -33,6 +33,7 @@ type BackupPreflightCompletedMsg struct {
 }
 type BackupConfirmedMsg struct{}
 type BackupCompletedMsg struct{ Result migration.BackupResult }
+type MigrationAuthenticationCompletedMsg struct{ Err error }
 
 // UpdateAction preserves the existing update contract behind an injectable seam.
 type UpdateAction interface{ Run(context.Context) error }
