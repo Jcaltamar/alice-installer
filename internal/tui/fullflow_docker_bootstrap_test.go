@@ -21,6 +21,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -108,15 +109,16 @@ func buildDockerBootstrapDeps(
 		},
 	}
 	return Dependencies{
-		Theme:   theme.Default(),
-		OS:      &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch:    &platform.FakeArchDetector{Arch: platform.ArchAMD64},
-		GPU:     &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
-		Ports:   &ports.FakePortScanner{},
-		Docker:  dockerClient,
-		Compose: runner,
-		Envgen:  &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "docker-password"}},
-		Writer:  &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Theme:    theme.Default(),
+		OS:       &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:     &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		GPU:      &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
+		Ports:    &ports.FakePortScanner{},
+		Docker:   dockerClient,
+		Compose:  runner,
+		Envgen:   &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "docker-password"}},
+		Writer:   &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Detector: &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		Assets: TemplateAssets{
 			EnvExample: []byte("WORKSPACE=\nPOSTGRES_PASSWORD=\n"),
 		},
@@ -201,7 +203,9 @@ func TestFullFlowDockerMissingBootstrapsInstall(t *testing.T) {
 
 	// Splash → preflight start.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 
 	// First preflight: Docker Probe fails → CheckDockerDaemon FAIL.
 	preflightResult := drainCmd(cmd)
@@ -281,7 +285,9 @@ func TestFullFlowUserNotInGroupBootstrapsGroupAdd(t *testing.T) {
 
 	// Splash → preflight.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 
 	// First preflight: Docker Probe fails → CheckDockerDaemon FAIL.
 	preflightResult := drainCmd(cmd)
@@ -364,7 +370,9 @@ func TestFullFlowSystemctlBootstrapsDaemonStart(t *testing.T) {
 
 	// Splash → preflight.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)
@@ -417,7 +425,9 @@ func TestFullFlowNonSystemdStuckNonFixable(t *testing.T) {
 
 	// Splash → preflight.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)
@@ -489,6 +499,7 @@ func TestFullFlowMixedDockerAndDirsActionsOrderedCorrectly(t *testing.T) {
 		Compose:              runner,
 		Envgen:               &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "mixed-password"}},
 		Writer:               &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Detector:             &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		Assets:               TemplateAssets{EnvExample: []byte("WORKSPACE=\nPOSTGRES_PASSWORD=\n")},
 		PreflightCoordinator: coord,
 		Executor:             fe,
@@ -501,7 +512,9 @@ func TestFullFlowMixedDockerAndDirsActionsOrderedCorrectly(t *testing.T) {
 
 	// Splash → preflight.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)

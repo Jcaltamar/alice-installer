@@ -5,13 +5,17 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -22,6 +26,8 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
 	"github.com/jcaltamar/alice-installer/internal/headless"
+	"github.com/jcaltamar/alice-installer/internal/installation"
+	"github.com/jcaltamar/alice-installer/internal/migration"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -229,8 +235,17 @@ func parseFlags(args []string) (flags, error) {
 	return f, nil
 }
 
-// newDependencies constructs all production implementations and returns a tui.Dependencies.
-func newDependencies(_ context.Context, f flags) tui.Dependencies {
+// newDependencies constructs production implementations for the interactive TUI.
+func newDependencies(ctx context.Context, f flags) tui.Dependencies {
+	return buildDependencies(ctx, f, true)
+}
+
+// newOperationalDependencies excludes contextual actions for explicit and non-interactive routes.
+func newOperationalDependencies(ctx context.Context, f flags) tui.Dependencies {
+	return buildDependencies(ctx, f, false)
+}
+
+func buildDependencies(_ context.Context, f flags, interactive bool) tui.Dependencies {
 	ctx := context.Background()
 	th := theme.Default()
 	osGuard := platform.NewRuntimeOSGuard(nil)
@@ -270,7 +285,7 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		EnvExample:   assets.EnvExample,
 	}
 
-	return tui.Dependencies{
+	deps := tui.Dependencies{
 		Theme:                th,
 		OS:                   osGuard,
 		Arch:                 archDetector,
@@ -292,6 +307,71 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		WorkspaceDir:         f.WorkspaceDir,
 		RequiredTCPPorts:     defaultPorts,
 	}
+	if interactive {
+		deps.Detector = installation.CompositeDetector{
+			Current: installation.WorkspaceProbe{WorkspaceDir: f.WorkspaceDir},
+			Legacy: installation.LegacyFallbackProbe{
+				Directory: installation.KnownLegacyDirectoryProbe{
+					Platform: installation.Platform{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH},
+				},
+				PM2: installation.PM2Probe{
+					Runner:   &platform.OSCommandRunner{},
+					Platform: installation.Platform{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH},
+					Policy:   installation.LegacyPolicy{},
+				},
+			},
+		}
+		deps.UpdateAction = update.Action{
+			Config:       update.Config{WorkspaceDir: f.WorkspaceDir},
+			Dependencies: update.Dependencies{Compose: composeRunner, GPU: gpuDetector},
+		}
+		if restoreSupportedPlatform(runtime.GOOS, runtime.GOARCH) {
+			backupRoot := "/opt/alice/backups/"
+			executor := migration.OSBinaryExecutor{}
+			pm2Runner := &platform.OSCommandRunner{}
+			deps.LegacyBackupAction = migration.BackupAction{
+				Resolver:  migration.Resolver{},
+				Inspector: migration.InspectorDiscovery{Inspector: migration.DockerCLIInspector{Runner: &platform.OSCommandRunner{}}},
+				Store:     migration.OSDestinationStore{Privilege: &platform.OSCommandRunner{}},
+				Executor:  executor,
+				Transport: migration.CredentialTransport{},
+				Validator: migration.PG11ArchiveValidator{Executor: executor, Timeout: 30 * time.Minute},
+				GOOS:      runtime.GOOS,
+				Timeout:   30 * time.Minute,
+			}
+			deps.LegacyBackupRequest = migration.BackupRequest{Destination: backupRoot, ConfigEnvironment: string(migration.EnvironmentProduction)}
+			coordinator, err := migration.NewProductionRestoreCoordinator(migration.ProductionRestoreDependencies{
+				Compose: composeRunner, OperationID: newRestoreOperationID,
+			})
+			if err == nil {
+				deps.LegacyRestoreAction = coordinator
+				deps.MigrationHandoff = &migration.PreInstallMigrationCoordinator{
+					Legacy: migration.BackupGate{Validator: migration.PG11ArchiveValidator{Executor: executor, Timeout: 30 * time.Minute}},
+					PM2: installation.PM2Quiescer{
+						Snapshots: installation.LinuxPM2SnapshotProvider{
+							Inventory: installation.LinuxPM2Inventory{Runner: pm2Runner},
+							Sockets:   installation.LinuxSocketSnapshot{Runner: pm2Runner},
+							Proc:      installation.LinuxProcIdentity{},
+						},
+						Controller: installation.PM2Controller{Runner: pm2Runner},
+					},
+				}
+			}
+		}
+	}
+	return deps
+}
+
+func restoreSupportedPlatform(goos, goarch string) bool {
+	return goos == "linux" && (goarch == "amd64" || goarch == "arm64")
+}
+
+func newRestoreOperationID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
 }
 
 func newAsteriskOptions(configDir string, passwordGen secrets.PasswordGenerator) asterisk.Options {
@@ -398,7 +478,11 @@ func runWithStaleCheck(
 	}
 
 	if factory == nil {
-		factory = newDependencies
+		if mode == modeUpdate || mode == modeRestart || f.DryRun || f.Unattended {
+			factory = newOperationalDependencies
+		} else {
+			factory = newDependencies
+		}
 	}
 
 	ctx := context.Background()

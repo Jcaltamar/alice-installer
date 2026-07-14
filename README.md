@@ -20,6 +20,29 @@ alice-installer update   # refresh an existing deployment in-place
 alice-installer restart  # restart existing services in-place
 ```
 
+## Interactive installation detection
+
+After the splash screen, interactive mode checks the selected workspace before it enters install preflight. The check is read-only and shows only safe evidence categories.
+
+| Detected state | Interactive action |
+| --- | --- |
+| No current or configured legacy evidence | Install |
+| Complete current Compose artifacts | Update; Uninstall is shown but blocked |
+| Confirmed legacy deployment on Linux amd64/arm64 | Migration Step 1: reviewed, confirmed backup |
+| Partial, conflicting, unreadable, or ambiguous evidence | No lifecycle action; exit or use an explicit CLI route after manual verification |
+
+Current Compose detection uses `.env` and `docker-compose.yml` in `--workspace-dir`. Legacy PM2 probing is supported only on Linux amd64 and arm64. Its default policy is intentionally empty: the installer does not guess PM2 process names, scripts, or deployment paths. Unsupported platforms do not infer a legacy installation.
+
+Uninstall remains informational and blocked. On Linux amd64/arm64 only, a confirmed legacy deployment can enter Migration Step 1. The operator reviews a redacted production configuration, exact PostgreSQL 11 container identity, and protected default destination, then presses Enter to confirm. Nothing is created before that confirmation.
+
+Migration is available only after interactive confirmation on Linux amd64/arm64. Before preflight or any installation side effect, it revalidates the legacy backup and selectively quiesces only a fully proven legacy PM2 process: `/opt/alice-guardian` on TCP `8080`, or `/opt/backend_alice_guardian` on TCP `9090` or `4550`. This requires `pm2`, `ss`, and readable Linux `/proc` process identity metadata; incomplete or ambiguous evidence blocks migration without installing. The existing deploy remains unchanged; then the migration flow waits exactly 60 seconds before it stops only Compose service `backend`. Compose identities are immutable: `backend`/`alice_backend` and `postgresql-master`/`alice_postgresql-master`. PostgreSQL stays running.
+
+Before destructive replacement, the installer retains two validated custom-format backups under `/opt/alice/backups/`: the legacy dump and a newly created target rollback backup. It explicitly drops and recreates the target database, then restores with fail-fast `pg_restore --exit-on-error --no-owner --no-privileges`; it never merges data. A successful restore also requires a fresh connection, a non-system application table, PostgreSQL reachability, and backend health.
+
+Any failure, cancellation, or abandoned migration after PM2 quiescence first completes database rollback when required, then attempts bounded recovery of exactly the PM2 identities it stopped. Final `InstallSuccessMsg` is the only completion that retains the proven legacy PM2 set stopped. Any database failure after replacement begins is an explicit partial cutover. The installer automatically restores only the validated target rollback backup, retains both backups, and starts `backend` only after recovery is healthy. If recovery cannot be proven, PostgreSQL remains running and `backend` remains stopped; follow `RUNBOOK.md`. Passwords, raw dump output, command output, and pgpass paths are never shown.
+
+Install, Update, Restart, `--dry-run`, unattended/headless, Windows, and unsupported-platform routes remain unchanged and cannot invoke restore. Feature rollback removes the interactive restore action only; it never deletes operator backups.
+
 ## Update or restart an existing installation
 
 Use `alice-installer update` to refresh containers using the existing workspace artifacts from a prior install.
@@ -112,6 +135,7 @@ FULL_DEPLOY=1 make e2e     # full mode — pulls images (~3 GB) and brings servi
 ```
 
 The basic mode validates:
+
 - Docker is installed and the `docker compose` plugin works
 - `testuser` is added to the `docker` group
 - `/opt/alice-media` and `/opt/alice-config` are created and writable

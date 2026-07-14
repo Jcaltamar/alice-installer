@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -10,6 +12,8 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
+	"github.com/jcaltamar/alice-installer/internal/migration"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -20,18 +24,35 @@ import (
 type State int
 
 const (
-	StateSplash           State = iota
-	StatePreflight        State = iota
-	StateBootstrap        State = iota // auto-elevation: sits between preflight and workspace-input
-	StateWorkspaceInput   State = iota
-	StateOptionalPackages State = iota
-	StatePortScan         State = iota
-	StateEnvWrite         State = iota
-	StateAsteriskSetup    State = iota
-	StatePull             State = iota
-	StateDeploy           State = iota
-	StateVerify           State = iota
-	StateResult           State = iota
+	StateSplash              State = iota
+	StatePreflight           State = iota
+	StateBootstrap           State = iota // auto-elevation: sits between preflight and workspace-input
+	StateWorkspaceInput      State = iota
+	StateOptionalPackages    State = iota
+	StatePortScan            State = iota
+	StateEnvWrite            State = iota
+	StateAsteriskSetup       State = iota
+	StatePull                State = iota
+	StateDeploy              State = iota
+	StateVerify              State = iota
+	StateResult              State = iota
+	StateDetecting           State = iota
+	StateContextMenu         State = iota
+	StateUpdating            State = iota
+	StateBlockedOperation    State = iota
+	StateActionResult        State = iota
+	StateBackupPreflight     State = iota
+	StateBackupConfirm       State = iota
+	StateBackupRunning       State = iota
+	StateBackupResult        State = iota
+	StateMigrationBlocked    State = iota
+	StateDatabaseRestore     State = iota
+	StateMigrationResult     State = iota
+	StateMigrationQuiescence State = iota
+	StateMigrationRecovery   State = iota
+	StateMigrationSuccess    State = iota
+	StateMigrationConfirm    State = iota
+	StateMigrationCancelled  State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -44,19 +65,25 @@ type TemplateAssets struct {
 // Dependencies holds all injectable dependencies for the root Model.
 // Every field is an interface so tests can inject fakes without globals.
 type Dependencies struct {
-	Theme             theme.Theme
-	OS                platform.OSGuard
-	Arch              platform.ArchDetector
-	GPU               platform.GPUDetector
-	Ports             ports.PortScanner
-	Docker            docker.DockerClient
-	Compose           compose.ComposeRunner
-	Envgen            *envgen.Templater
-	Writer            envgen.FileWriter
-	Assets            TemplateAssets
-	AsteriskInstaller AsteriskInstaller
-	AsteriskOptions   asterisk.Options
-	AsteriskAvailable func() bool
+	Theme               theme.Theme
+	OS                  platform.OSGuard
+	Arch                platform.ArchDetector
+	GPU                 platform.GPUDetector
+	Ports               ports.PortScanner
+	Docker              docker.DockerClient
+	Compose             compose.ComposeRunner
+	Envgen              *envgen.Templater
+	Writer              envgen.FileWriter
+	Assets              TemplateAssets
+	AsteriskInstaller   AsteriskInstaller
+	AsteriskOptions     asterisk.Options
+	AsteriskAvailable   func() bool
+	Detector            installation.Detector
+	UpdateAction        UpdateAction
+	LegacyBackupAction  LegacyBackupAction
+	LegacyBackupRequest migration.BackupRequest
+	LegacyRestoreAction migration.LegacyRestoreAction
+	MigrationHandoff    MigrationHandoff
 
 	PreflightCoordinator preflight.Coordinator
 
@@ -96,6 +123,17 @@ type Model struct {
 	deploy                DeployModel
 	verify                VerifyModel
 	result                ResultModel
+	contextMenu           ContextMenuModel
+	blockedOperation      blockedOperationModel
+	actionResult          actionResultModel
+	backupPlan            migration.BackupPlan
+	backupResult          migration.BackupResult
+	backupCancel          context.CancelFunc
+	restoreCancel         context.CancelFunc
+	quiescenceCancel      context.CancelFunc
+	restoreResult         migration.RestoreResult
+	migrationLease        *migration.PreInstallMigrationLease
+	migrationRecoveryCode string
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -105,6 +143,7 @@ type Model struct {
 	envPath          string   // absolute path to the written .env
 	composeFiles     []string // computed once at env-write → pull transition
 	gpuDetected      bool
+	migrationPending bool
 
 	// attemptedActions tracks bootstrap Action IDs that have already been
 	// executed successfully in this session. Prevents bootstrap from looping
@@ -179,9 +218,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case msg.Type == tea.KeyCtrlC:
+			if m.state == StateBackupRunning && m.backupCancel != nil {
+				m.backupCancel()
+				return m, nil
+			}
+			if m.state == StateMigrationQuiescence && m.quiescenceCancel != nil {
+				m.quiescenceCancel()
+				return m, nil
+			}
+			if m.state == StateDatabaseRestore && m.restoreCancel != nil {
+				m.restoreCancel()
+				return m, nil
+			}
+			if m.hasLiveMigrationLease() {
+				return m.beginMigrationRecovery()
+			}
+			return m, tea.Quit
+
+		case msg.Type == tea.KeyEsc && m.state == StateBackupRunning:
+			if m.backupCancel != nil {
+				m.backupCancel()
+			}
+			return m, nil
+		case msg.Type == tea.KeyEsc && m.state == StateMigrationConfirm:
+			m.state = StateMigrationCancelled
+			return m, nil
+		case msg.Type == tea.KeyEsc && m.state == StateMigrationQuiescence && m.quiescenceCancel != nil:
+			m.quiescenceCancel()
+			return m, nil
+		case msg.Type == tea.KeyEsc && m.state == StateDatabaseRestore:
+			if m.restoreCancel != nil {
+				m.restoreCancel()
+			}
+			return m, nil
+		case msg.Type == tea.KeyEsc && m.hasLiveMigrationLease():
+			return m.beginMigrationRecovery()
+		case msg.Type == tea.KeyEsc && (m.state == StateDetecting || m.state == StateContextMenu):
 			return m, tea.Quit
 
 		case msg.Type == tea.KeyRunes && string(msg.Runes) == "q":
+			if m.state == StateMigrationConfirm {
+				m.state = StateMigrationCancelled
+				return m, nil
+			}
+			if m.state == StateBackupRunning && m.backupCancel != nil {
+				m.backupCancel()
+				return m, nil
+			}
+			if m.state == StateMigrationQuiescence && m.quiescenceCancel != nil {
+				m.quiescenceCancel()
+				return m, nil
+			}
+			if m.state == StateDatabaseRestore && m.restoreCancel != nil {
+				m.restoreCancel()
+				return m, nil
+			}
+			if m.hasLiveMigrationLease() {
+				return m.beginMigrationRecovery()
+			}
 			// "q" quits from any state EXCEPT the workspace text input.
 			if m.state != StateWorkspaceInput {
 				return m, tea.Quit
@@ -194,6 +288,153 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// the root can intercept and switch state).
 	// -----------------------------------------------------------------------
 	switch msg := msg.(type) {
+	case DetectionStartedMsg:
+		m.state = StateDetecting
+		if m.deps.Detector == nil {
+			return m, func() tea.Msg {
+				return DetectionCompletedMsg{Detection: installation.Detection{State: installation.StateUnknown}}
+			}
+		}
+		return m, func() tea.Msg { return DetectionCompletedMsg{Detection: m.deps.Detector.Detect(context.Background())} }
+
+	case DetectionCompletedMsg:
+		m.state = StateContextMenu
+		m.contextMenu = NewContextMenuModel(m.deps.Theme, msg.Detection)
+		return m, nil
+
+	case ContextActionSelectedMsg:
+		if m.state != StateContextMenu || !m.contextMenu.hasAction(msg.Action) {
+			return m, nil
+		}
+		switch msg.Action {
+		case ContextActionInstall:
+			m.state = StatePreflight
+			return m, m.preflight.Init()
+		case ContextActionUpdate:
+			m.state = StateUpdating
+			if m.deps.UpdateAction == nil {
+				return m, func() tea.Msg { return UpdateCompletedMsg{Err: fmt.Errorf("update action is unavailable")} }
+			}
+			return m, func() tea.Msg { return UpdateCompletedMsg{Err: m.deps.UpdateAction.Run(context.Background())} }
+		case ContextActionUninstall:
+			m.state = StateBlockedOperation
+			m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
+			return m, nil
+		case ContextActionMigration:
+			if m.deps.LegacyBackupAction == nil {
+				m.state = StateBlockedOperation
+				m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
+				return m, nil
+			}
+			m.state = StateBackupPreflight
+			return m, func() tea.Msg {
+				plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), m.deps.LegacyBackupRequest)
+				return BackupPreflightCompletedMsg{Plan: plan, Err: err}
+			}
+		}
+
+	case BackupPreflightCompletedMsg:
+		if m.state != StateBackupPreflight {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.state = StateBackupResult
+			m.backupResult = migration.BackupResult{Outcome: migration.BackupPreconditionFailed, Message: "backup preflight failed"}
+			return m, nil
+		}
+		m.backupPlan = msg.Plan
+		m.state = StateBackupConfirm
+		return m, nil
+
+	case BackupConfirmedMsg:
+		if m.state != StateBackupConfirm || m.deps.LegacyBackupAction == nil {
+			return m, nil
+		}
+		m.state = StateBackupRunning
+		ctx, cancel := context.WithCancel(context.Background())
+		m.backupCancel = cancel
+		return m, func() tea.Msg { return BackupCompletedMsg{Result: m.deps.LegacyBackupAction.Run(ctx, m.backupPlan)} }
+
+	case BackupCompletedMsg:
+		if m.state != StateBackupRunning {
+			return m, nil
+		}
+		m.backupCancel = nil
+		m.backupResult = msg.Result
+		if msg.Result.Outcome == migration.BackupValidated {
+			if m.deps.LegacyRestoreAction == nil || m.deps.MigrationHandoff == nil {
+				m.state = StateMigrationBlocked
+				return m, nil
+			}
+			m.state = StateMigrationConfirm
+			return m, nil
+		}
+		m.state = StateBackupResult
+		return m, nil
+
+	case MigrationQuiescenceCompletedMsg:
+		if m.state != StateMigrationQuiescence {
+			return m, nil
+		}
+		m.quiescenceCancel = nil
+		if msg.Err != nil || msg.Lease == nil {
+			m.state = StateMigrationResult
+			m.migrationRecoveryCode = "pm2-quiescence-unavailable"
+			return m, nil
+		}
+		m.migrationLease = msg.Lease
+		m.migrationPending = true
+		m.state = StatePreflight
+		return m, m.preflight.Init()
+
+	case MigrationRecoveryCompletedMsg:
+		if m.state != StateMigrationRecovery {
+			return m, nil
+		}
+		m.migrationLease = nil
+		m.migrationPending = false
+		m.migrationRecoveryCode = boundedRecoveryCode(msg.Recovery, msg.Err)
+		m.state = StateMigrationResult
+		return m, nil
+
+	case MigrationSuccessCompletedMsg:
+		if m.state != StateMigrationSuccess {
+			return m, nil
+		}
+		m.migrationLease = nil
+		m.migrationPending = false
+		if msg.Err != nil {
+			m.migrationRecoveryCode = "pm2-lease-completion-failed"
+			m.state = StateMigrationResult
+			return m, nil
+		}
+		m.state = StateResult
+		m.result = NewResultModel(m.deps.Theme, &msg.Success, nil)
+		return m, nil
+
+	case MigrationAbandonedMsg:
+		if m.state == StateMigrationQuiescence && m.quiescenceCancel != nil {
+			m.quiescenceCancel()
+			return m, nil
+		}
+		if m.state == StateDatabaseRestore && m.restoreCancel != nil {
+			m.restoreCancel()
+			return m, nil
+		}
+		if m.hasLiveMigrationLease() {
+			return m.beginMigrationRecovery()
+		}
+		return m, nil
+
+	case UpdateCompletedMsg:
+		m.state = StateActionResult
+		m.actionResult = actionResultModel{theme: m.deps.Theme, err: msg.Err}
+		return m, nil
+
+	case BlockedOperationDismissedMsg:
+		m.state = StateContextMenu
+		return m, nil
+
 	case PreflightStartedMsg:
 		m.state = StatePreflight
 		return m, m.preflight.Init()
@@ -345,6 +586,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deploy = NewDeployModel(m.deps.Theme, m.deps.Compose, m.composeFiles, m.envPath)
 		return m, m.deploy.Init()
 
+	case DeployCompleteMsg:
+		if m.state == StateDeploy && m.migrationPending {
+			m.state = StateDatabaseRestore
+			ctx, cancel := context.WithCancel(context.Background())
+			m.restoreCancel = cancel
+			request := migration.RestoreRequest{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, ComposeFiles: m.composeFiles, EnvFile: m.envPath, BackupDestination: "/opt/alice/backups/", Legacy: migration.BackupRef{DumpPath: m.backupResult.DumpPath, ManifestPath: m.backupResult.ManifestPath, SHA256: m.backupResult.SHA256, Size: m.backupResult.Size}}
+			return m, func() tea.Msg { return RestoreCompletedMsg{Result: m.deps.LegacyRestoreAction.Run(ctx, request)} }
+		}
+	case RestoreCompletedMsg:
+		if m.state != StateDatabaseRestore {
+			return m, nil
+		}
+		m.restoreCancel = nil
+		m.restoreResult = msg.Result
+		if msg.Result.Outcome == migration.RestoreSucceeded {
+			m.state = StateDeploy
+			return m, func() tea.Msg { return HealthTickMsg{} }
+		}
+		return m.beginMigrationRecovery()
 	case HealthTickMsg:
 		// Transition to verify only if we're still in deploy state (first tick).
 		if m.state == StateDeploy {
@@ -354,11 +614,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case InstallSuccessMsg:
+		if m.hasLiveMigrationLease() {
+			m.state = StateMigrationSuccess
+			return m, m.completeMigrationSuccess(msg)
+		}
 		m.state = StateResult
 		m.result = NewResultModel(m.deps.Theme, &msg, nil)
 		return m, nil
 
 	case InstallFailureMsg:
+		if m.hasLiveMigrationLease() {
+			return m.beginMigrationRecovery()
+		}
 		m.state = StateResult
 		m.result = NewResultModel(m.deps.Theme, nil, &msg)
 		return m, nil
@@ -373,6 +640,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var updated SplashModel
 		updated, cmd = m.splash.Update(msg)
 		m.splash = updated
+
+	case StateContextMenu:
+		var updated ContextMenuModel
+		updated, cmd = m.contextMenu.Update(msg)
+		m.contextMenu = updated
+
+	case StateBlockedOperation:
+		var updated blockedOperationModel
+		updated, cmd = m.blockedOperation.Update(msg)
+		m.blockedOperation = updated
 
 	case StatePreflight:
 		var updated PreflightModel
@@ -428,9 +705,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var updated ResultModel
 		updated, cmd = m.result.Update(msg)
 		m.result = updated
+
+	case StateBackupConfirm:
+		if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyEnter {
+			return m.Update(BackupConfirmedMsg{})
+		}
+
+	case StateMigrationConfirm:
+		if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyEnter {
+			return m.beginMigrationQuiescence()
+		}
 	}
 
 	return m, cmd
+}
+
+func (m Model) backupConfirmationView() string {
+	review := m.backupPlan.Review()
+	return m.deps.Theme.Primary.Bold(true).Render("Review PostgreSQL backup") + fmt.Sprintf(
+		"\n\nSelected environment: %s\nEndpoint: %s\nDatabase: %s\nUser: %s\nContainer ID: %s\nImage: %s\nDestination: %s\n\nNo backup artifact has been created. Confirm to create a validated backup in the protected destination.\n\nPress Enter to confirm or Escape to cancel.\n",
+		review.Environment,
+		review.Endpoint,
+		review.Database,
+		review.User,
+		review.ContainerID,
+		review.Image,
+		review.Destination,
+	)
 }
 
 func asteriskAvailable(deps Dependencies) bool {
@@ -452,6 +753,41 @@ func (m Model) View() string {
 	switch m.state {
 	case StateSplash:
 		return m.splash.View()
+	case StateDetecting:
+		return m.deps.Theme.TextMuted.Render("Detecting existing installation…")
+	case StateContextMenu:
+		return m.contextMenu.View()
+	case StateUpdating:
+		return m.deps.Theme.TextMuted.Render("Updating existing installation…")
+	case StateBlockedOperation:
+		return m.blockedOperation.View()
+	case StateActionResult:
+		return m.actionResult.View()
+	case StateBackupPreflight:
+		return m.deps.Theme.TextMuted.Render("Reviewing legacy backup prerequisites…")
+	case StateBackupConfirm:
+		return m.backupConfirmationView()
+	case StateBackupRunning:
+		return m.deps.Theme.TextMuted.Render("Creating backup: dump, validate, and publish. Press Escape to cancel safely.")
+	case StateMigrationConfirm:
+		return m.deps.Theme.Primary.Bold(true).Render("Backup validated") + fmt.Sprintf("\n\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nThe validated backup is complete. Continuing will stop the confirmed legacy PM2 services and begin installing the new services.\n\nPress Enter to continue or Escape to stop here and preserve the backup.\n", m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
+	case StateMigrationCancelled:
+		return m.deps.Theme.Primary.Bold(true).Render("Migration stopped safely") + fmt.Sprintf("\n\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nPM2 services were not stopped and new services were not installed. The validated backup was preserved.\n", m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
+	case StateBackupResult:
+		return m.deps.Theme.TextMuted.Render("Backup did not validate. Later migration steps remain blocked.\n")
+	case StateDatabaseRestore:
+		return m.migrationRestoreView()
+	case StateMigrationQuiescence:
+		return m.migrationQuiescenceView()
+	case StateMigrationRecovery:
+		return m.migrationRecoveryView()
+	case StateMigrationResult:
+		if m.migrationRecoveryCode != "" {
+			return m.migrationTerminalView()
+		}
+		return m.migrationResultView()
+	case StateMigrationBlocked:
+		return m.deps.Theme.Primary.Bold(true).Render("Backup validated") + fmt.Sprintf("\n\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nLater migration steps are not implemented and remain blocked. No restore, cutover, or source mutation was performed.\n", m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
 	case StatePreflight:
 		return m.preflight.View()
 	case StateBootstrap:

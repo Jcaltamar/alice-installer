@@ -22,6 +22,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -73,15 +74,16 @@ func buildBootstrapFlowDeps(
 		MinComposeVersion: "2.0.0",
 	}
 	return Dependencies{
-		Theme:   theme.Default(),
-		OS:      &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch:    &platform.FakeArchDetector{Arch: platform.ArchAMD64},
-		GPU:     &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
-		Ports:   &ports.FakePortScanner{},
-		Docker:  &docker.FakeDockerClient{VersionVal: docker.Version{Client: "25.0.0", Server: "25.0.0"}},
-		Compose: runner,
-		Envgen:  &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "bootstrap-password"}},
-		Writer:  fw,
+		Theme:    theme.Default(),
+		OS:       &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:     &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		GPU:      &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
+		Ports:    &ports.FakePortScanner{},
+		Docker:   &docker.FakeDockerClient{VersionVal: docker.Version{Client: "25.0.0", Server: "25.0.0"}},
+		Compose:  runner,
+		Envgen:   &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "bootstrap-password"}},
+		Writer:   fw,
+		Detector: &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		Assets: TemplateAssets{
 			EnvExample: []byte("WORKSPACE=\nPOSTGRES_PASSWORD=\n"),
 		},
@@ -129,17 +131,10 @@ func TestFullFlowBootstrapHappyPath(t *testing.T) {
 
 	m := NewModel(buildBootstrapFlowDeps(fw, runner, dirChecker, fe))
 
-	// --- Step 1: Splash → press Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Step 1: Splash → detection → contextual Install → StatePreflight ---
+	m, cmd := enterInstallFromSplash(m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: Preflight runs → ConfigDir FAIL → StateBootstrap ---
@@ -323,7 +318,9 @@ func TestFullFlowBootstrapSkippedPreservesReport(t *testing.T) {
 
 	// Splash → Enter → PreflightStartedMsg → StatePreflight → run preflight → StateBootstrap.
 	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	m, cmd = sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 	preflightResultMsg := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResultMsg)
 	if m.state != StateBootstrap {

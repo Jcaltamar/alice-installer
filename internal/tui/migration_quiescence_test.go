@@ -1,0 +1,225 @@
+package tui
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jcaltamar/alice-installer/internal/installation"
+	"github.com/jcaltamar/alice-installer/internal/migration"
+)
+
+type fakeMigrationHandoff struct {
+	beginCalls    int
+	failureCalls  int
+	successCalls  int
+	beginErr      error
+	recovery      installation.PM2Recovery
+	recoveryErr   error
+	lastBackupRef migration.BackupRef
+}
+
+func (h *fakeMigrationHandoff) Begin(_ context.Context, ref migration.BackupRef) (*migration.PreInstallMigrationLease, error) {
+	h.beginCalls++
+	h.lastBackupRef = ref
+	if h.beginErr != nil {
+		return nil, h.beginErr
+	}
+	return &migration.PreInstallMigrationLease{}, nil
+}
+
+func (h *fakeMigrationHandoff) CompleteSuccess(*migration.PreInstallMigrationLease) error {
+	h.successCalls++
+	return nil
+}
+
+func (h *fakeMigrationHandoff) CompleteFailure(*migration.PreInstallMigrationLease) (installation.PM2Recovery, error) {
+	h.failureCalls++
+	return h.recovery, h.recoveryErr
+}
+
+func TestMigrationQuiescenceAcquiresLeaseBeforePreflight(t *testing.T) {
+	deps := buildTestDeps()
+	handoff := &fakeMigrationHandoff{}
+	deps.LegacyRestoreAction = &fakeLegacyRestoreAction{result: migration.RestoreResult{Outcome: migration.RestoreSucceeded}}
+	deps.MigrationHandoff = handoff
+	m := NewModel(deps)
+	m.state = StateBackupRunning
+
+	backup := migration.BackupResult{Outcome: migration.BackupValidated, DumpPath: "/opt/alice/backups/legacy.dump", ManifestPath: "/opt/alice/backups/legacy.json", SHA256: "sum", Size: 1}
+	updated, cmd := m.Update(BackupCompletedMsg{Result: backup})
+	m = updated.(Model)
+	if m.state != StateMigrationConfirm || cmd != nil || handoff.beginCalls != 0 {
+		t.Fatalf("validated backup must wait for operator confirmation: state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
+	}
+	view := m.View()
+	for _, text := range []string{"stop the confirmed legacy PM2 services", "installing the new services", "Press Enter to continue", "preserve the backup"} {
+		if !strings.Contains(view, text) {
+			t.Fatalf("migration checkpoint view missing %q: %s", text, view)
+		}
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.state != StateMigrationQuiescence || cmd == nil || handoff.beginCalls != 0 {
+		t.Fatalf("acquisition state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StatePreflight || !m.migrationPending || m.migrationLease == nil || handoff.beginCalls != 1 || cmd == nil {
+		t.Fatalf("lease handoff state/pending/lease/calls/cmd = %v/%t/%t/%d/%v", m.state, m.migrationPending, m.migrationLease != nil, handoff.beginCalls, cmd)
+	}
+	if got := handoff.lastBackupRef.DumpPath; got != backup.DumpPath {
+		t.Fatalf("handoff backup = %q, want %q", got, backup.DumpPath)
+	}
+}
+
+func TestMigrationCheckpointCancellationPreservesBackupWithoutQuiescence(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune{'q'}}} {
+		deps := buildTestDeps()
+		handoff := &fakeMigrationHandoff{}
+		deps.LegacyRestoreAction = &fakeLegacyRestoreAction{result: migration.RestoreResult{Outcome: migration.RestoreSucceeded}}
+		deps.MigrationHandoff = handoff
+		m := NewModel(deps)
+		m.state = StateBackupRunning
+		backup := migration.BackupResult{Outcome: migration.BackupValidated, DumpPath: "/opt/alice/backups/legacy.dump", ManifestPath: "/opt/alice/backups/legacy.json", SHA256: "sum", Size: 1}
+
+		updated, _ := m.Update(BackupCompletedMsg{Result: backup})
+		m = updated.(Model)
+		updated, cmd := m.Update(key)
+		m = updated.(Model)
+
+		if m.state != StateMigrationCancelled || cmd != nil || handoff.beginCalls != 0 || m.migrationPending || m.migrationLease != nil {
+			t.Fatalf("cancelled checkpoint state/cmd/calls/pending/lease = %v/%v/%d/%t/%t", m.state, cmd, handoff.beginCalls, m.migrationPending, m.migrationLease != nil)
+		}
+		if m.backupResult.DumpPath != backup.DumpPath || m.backupResult.ManifestPath != backup.ManifestPath {
+			t.Fatalf("validated backup was not preserved: %#v", m.backupResult)
+		}
+	}
+}
+
+func TestMigrationQuiescenceFailureBlocksBeforePreflight(t *testing.T) {
+	deps := buildTestDeps()
+	deps.LegacyRestoreAction = &fakeLegacyRestoreAction{}
+	deps.MigrationHandoff = &fakeMigrationHandoff{beginErr: errors.New("unavailable")}
+	m := NewModel(deps)
+	m.state = StateBackupRunning
+
+	updated, cmd := m.Update(BackupCompletedMsg{Result: migration.BackupResult{Outcome: migration.BackupValidated}})
+	m = updated.(Model)
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationResult || m.migrationPending || m.migrationLease != nil || cmd != nil {
+		t.Fatalf("failed acquisition state/pending/lease/cmd = %v/%t/%t/%v", m.state, m.migrationPending, m.migrationLease != nil, cmd)
+	}
+}
+
+func TestMigrationLiveLeaseTerminalPathsRecoverExceptInstallSuccess(t *testing.T) {
+	for _, msg := range []tea.Msg{
+		InstallFailureMsg{Stage: "deploy", Err: errors.New("failure")},
+		InstallFailureMsg{Stage: "verify", Err: errors.New("verification failure")},
+		RestoreCompletedMsg{Result: migration.RestoreResult{Outcome: migration.RestoreFailedBeforeCutover, FailedStage: migration.StageCredentials}},
+		RestoreCompletedMsg{Result: migration.RestoreResult{Outcome: migration.RestoreUnsupported, FailedStage: migration.StagePlatformGate}},
+		RestoreCompletedMsg{Result: migration.RestoreResult{Outcome: migration.RestoreCancelledBeforeCutover, FailedStage: migration.StageWait}},
+		RestoreCompletedMsg{Result: migration.RestoreResult{Outcome: migration.RestorePartialCutover, FailedStage: migration.StageRollback}},
+		tea.KeyMsg{Type: tea.KeyEsc},
+		tea.KeyMsg{Type: tea.KeyCtrlC},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		MigrationAbandonedMsg{},
+	} {
+		t.Run("terminal", func(t *testing.T) {
+			deps := buildTestDeps()
+			handoff := &fakeMigrationHandoff{recovery: installation.PM2Recovery{Verified: true, Code: "pm2-recovery-verified"}}
+			deps.MigrationHandoff = handoff
+			m := NewModel(deps)
+			m.state, m.migrationPending, m.migrationLease = StateDeploy, true, &migration.PreInstallMigrationLease{}
+			if _, ok := msg.(RestoreCompletedMsg); ok {
+				m.state = StateDatabaseRestore
+			}
+			updated, cmd := m.Update(msg)
+			m = updated.(Model)
+			if m.state != StateMigrationRecovery || cmd == nil || handoff.failureCalls != 0 {
+				t.Fatalf("recovery state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.failureCalls)
+			}
+			updated, cmd = m.Update(cmd())
+			m = updated.(Model)
+			if m.state != StateMigrationResult || cmd != nil || handoff.failureCalls != 1 || m.migrationLease != nil {
+				t.Fatalf("terminal state/cmd/calls/lease = %v/%v/%d/%t", m.state, cmd, handoff.failureCalls, m.migrationLease != nil)
+			}
+		})
+	}
+
+	deps := buildTestDeps()
+	handoff := &fakeMigrationHandoff{}
+	deps.MigrationHandoff = handoff
+	m := NewModel(deps)
+	m.state, m.migrationPending, m.migrationLease = StateVerify, true, &migration.PreInstallMigrationLease{}
+	updated, cmd := m.Update(InstallSuccessMsg{})
+	m = updated.(Model)
+	if m.state != StateMigrationSuccess || cmd == nil || handoff.failureCalls != 0 {
+		t.Fatalf("success state/cmd/recovery = %v/%v/%d", m.state, cmd, handoff.failureCalls)
+	}
+	updated, _ = m.Update(cmd())
+	if updated.(Model).state != StateResult || handoff.successCalls != 1 || handoff.failureCalls != 0 {
+		t.Fatalf("success completion state/success/recovery = %v/%d/%d", updated.(Model).state, handoff.successCalls, handoff.failureCalls)
+	}
+}
+
+func TestMigrationRecoveryPanicBecomesBoundedTerminalResult(t *testing.T) {
+	deps := buildTestDeps()
+	deps.MigrationHandoff = panicFailureHandoff{}
+	m := NewModel(deps)
+	m.state, m.migrationPending, m.migrationLease = StateDeploy, true, &migration.PreInstallMigrationLease{}
+
+	updated, cmd := m.Update(MigrationAbandonedMsg{})
+	m = updated.(Model)
+	if m.state != StateMigrationRecovery || cmd == nil {
+		t.Fatalf("panic recovery start = state:%v cmd:%v", m.state, cmd)
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationResult || cmd != nil || m.migrationRecoveryCode != "pm2-recovery-unproven" {
+		t.Fatalf("panic recovery result = state:%v cmd:%v code:%q", m.state, cmd, m.migrationRecoveryCode)
+	}
+}
+
+type panicFailureHandoff struct{}
+
+func (panicFailureHandoff) Begin(context.Context, migration.BackupRef) (*migration.PreInstallMigrationLease, error) {
+	return nil, errors.New("unused")
+}
+
+func (panicFailureHandoff) CompleteSuccess(*migration.PreInstallMigrationLease) error {
+	return errors.New("unused")
+}
+
+func (panicFailureHandoff) CompleteFailure(*migration.PreInstallMigrationLease) (installation.PM2Recovery, error) {
+	panic("synthetic recovery panic")
+}
+
+func TestMigrationRestoreCancellationWaitsForDatabaseResultBeforePM2Recovery(t *testing.T) {
+	deps := buildTestDeps()
+	handoff := &fakeMigrationHandoff{recovery: installation.PM2Recovery{Verified: true, Code: "pm2-recovery-verified"}}
+	action := &fakeLegacyRestoreAction{cancelled: true}
+	deps.MigrationHandoff, deps.LegacyRestoreAction = handoff, action
+	m := NewModel(deps)
+	m.state, m.migrationPending, m.migrationLease = StateDeploy, true, &migration.PreInstallMigrationLease{}
+
+	updated, restoreCmd := m.Update(DeployCompleteMsg{})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.state != StateDatabaseRestore || cmd != nil || handoff.failureCalls != 0 {
+		t.Fatalf("cancellation must wait for restore completion: state/cmd/recovery = %v/%v/%d", m.state, cmd, handoff.failureCalls)
+	}
+	updated, recoveryCmd := m.Update(restoreCmd())
+	m = updated.(Model)
+	if m.state != StateMigrationRecovery || recoveryCmd == nil || handoff.failureCalls != 0 {
+		t.Fatalf("database result must precede PM2 recovery: state/cmd/recovery = %v/%v/%d", m.state, recoveryCmd, handoff.failureCalls)
+	}
+	_, _ = m.Update(recoveryCmd())
+}

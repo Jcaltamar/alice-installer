@@ -74,6 +74,18 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 }
 
+func TestRequiredArtifactPaths_UsesWorkspaceDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	paths := RequiredArtifactPaths(workspace)
+
+	if paths.EnvFile != workspace+"/.env" {
+		t.Fatalf("EnvFile = %q, want %q", paths.EnvFile, workspace+"/.env")
+	}
+	if paths.BaseFile != workspace+"/docker-compose.yml" {
+		t.Fatalf("BaseFile = %q, want %q", paths.BaseFile, workspace+"/docker-compose.yml")
+	}
+}
+
 func TestResolveArtifacts_ReturnsRequiredAndOptionalPaths(t *testing.T) {
 	workspace := t.TempDir()
 	mustWrite(t, workspace+"/.env", "WORKSPACE=test\n")

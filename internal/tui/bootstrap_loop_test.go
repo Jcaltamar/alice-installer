@@ -20,6 +20,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -84,15 +85,16 @@ func buildAdversarialLoopDeps(exec Executor) Dependencies {
 	}
 
 	return Dependencies{
-		Theme:   theme.Default(),
-		OS:      &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch:    &platform.FakeArchDetector{Arch: platform.ArchAMD64},
-		GPU:     &platform.FakeGPUDetector{},
-		Ports:   &ports.FakePortScanner{},
-		Docker:  dockerClient,
-		Compose: &compose.FakeComposeRunner{},
-		Envgen:  &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "loop-password"}},
-		Writer:  &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Theme:    theme.Default(),
+		OS:       &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:     &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		GPU:      &platform.FakeGPUDetector{},
+		Ports:    &ports.FakePortScanner{},
+		Docker:   dockerClient,
+		Compose:  &compose.FakeComposeRunner{},
+		Envgen:   &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "loop-password"}},
+		Writer:   &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Detector: &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		Assets: TemplateAssets{
 			EnvExample: []byte("WORKSPACE=\nPOSTGRES_PASSWORD=\n"),
 		},
@@ -123,17 +125,10 @@ func TestBootstrapLoopGuardPreventsInfiniteRetry(t *testing.T) {
 
 	m := NewModel(buildAdversarialLoopDeps(fe))
 
-	// --- Step 1: Splash → Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Step 1: Splash → detection → contextual Install → StatePreflight ---
+	m, cmd := enterInstallFromSplash(m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: First preflight runs → docker_daemon FAIL → StateBootstrap ---

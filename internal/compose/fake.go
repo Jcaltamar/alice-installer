@@ -19,6 +19,8 @@ type FakeComposeRunner struct {
 	UpErr            error
 	RestartErr       error
 	DownErr          error
+	StopServiceErr   error
+	StartServiceErr  error
 	// Healths is the slice of ServiceHealth returned by HealthStatus.
 	// Both Status (Health column) and State (lifecycle column) are honoured
 	// by compose.IsReady — set both fields in tests that exercise the
@@ -26,9 +28,11 @@ type FakeComposeRunner struct {
 	Healths   []ServiceHealth
 	HealthErr error
 
-	PullCalls []Call
-	UpCalls   []Call
-	RestartCalls []Call
+	PullCalls         []Call
+	UpCalls           []Call
+	RestartCalls      []Call
+	StopServiceCalls  []Call
+	StartServiceCalls []Call
 
 	CallOrder []string
 }
@@ -80,6 +84,20 @@ func (f *FakeComposeRunner) Restart(_ context.Context, files []string, envFile s
 // Down returns DownErr.
 func (f *FakeComposeRunner) Down(_ context.Context, _ []string, _ string) error {
 	return f.DownErr
+}
+
+// StopService records the allowlisted service call and returns StopServiceErr.
+func (f *FakeComposeRunner) StopService(_ context.Context, files []string, envFile, service string) error {
+	f.StopServiceCalls = append(f.StopServiceCalls, Call{Files: append([]string(nil), files...), EnvFile: envFile})
+	f.CallOrder = append(f.CallOrder, "stop:"+service)
+	return f.StopServiceErr
+}
+
+// StartService records the allowlisted service call and returns StartServiceErr.
+func (f *FakeComposeRunner) StartService(_ context.Context, files []string, envFile, service string) error {
+	f.StartServiceCalls = append(f.StartServiceCalls, Call{Files: append([]string(nil), files...), EnvFile: envFile})
+	f.CallOrder = append(f.CallOrder, "start:"+service)
+	return f.StartServiceErr
 }
 
 // HealthStatus returns Healths, HealthErr.

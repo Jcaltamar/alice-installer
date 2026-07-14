@@ -1,0 +1,8 @@
+[1;38;2;34;211;238mBackup validated[0m
+
+Dump: /safe/backup.dump
+Manifest: 
+SHA-256: abc
+Size: 42 bytes
+
+Later migration steps are not implemented and remain blocked. No restore, cutover, or source mutation was performed.

@@ -169,23 +169,38 @@ Read the release notes and `RUNBOOK.md` for the new version before upgrading. Pa
 
 ---
 
+## Contextual installation menu
+
+Interactive mode performs a read-only detection step after the splash screen and before preflight. It uses the selected `--workspace-dir` and the required `.env` and `docker-compose.yml` artifacts. Partial, unreadable, malformed, conflicting, or otherwise ambiguous evidence blocks lifecycle actions rather than treating the host as clean.
+
+Legacy PM2 probing is Linux amd64/arm64 only. It requires exact, configured Alice-specific identifiers with corroborating deployment paths. The production policy is intentionally empty until historical identifiers are confirmed, so generic PM2 processes never qualify. Unsupported platforms show no legacy positive result.
+
+Use the explicit `update` or `restart` commands when their artifact requirements are met. Uninstall remains informational and blocked.
+
+## Legacy migration and recovery
+
+Legacy restore is offered only after a confirmed interactive Migration selection on Linux amd64 or arm64. It is never offered by Windows, unsupported platforms, Install, Update, Restart, `--dry-run`, unattended, or headless routes; those routes retain their existing behavior.
+
+### Cutover contract
+
+1. Before preflight or any installation side effect, the installer revalidates the legacy backup and stops only a PM2 identity proven by canonical Linux process and socket evidence: `/opt/alice-guardian` on TCP `8080`, or `/opt/backend_alice_guardian` on TCP `9090` or `4550`. `pm2`, `ss`, and readable `/proc` identity metadata are required; missing, ambiguous, or changed evidence blocks migration.
+2. The existing deployment completes unchanged. The restore then performs one cancellable **60-second** wait before it stops only Compose service `backend`.
+3. Names are immutable: application `backend` / `alice_backend`; database `postgresql-master` / `alice_postgresql-master`. PostgreSQL stays running; the installer never uses whole-stack shutdown or PostgreSQL service control.
+4. Before replacement, two validated custom-format backups are retained under `/opt/alice/backups/`: the legacy archive and a distinct target rollback archive. Neither is overwritten or deleted automatically.
+5. The target is destructively replaced: sessions are terminated, the database is dropped and recreated, then `pg_restore --exit-on-error --no-owner --no-privileges` restores the legacy archive. This is not a merge.
+6. Success requires restore exit evidence, a new target connection, at least one non-system application table, PostgreSQL reachability, and a healthy restarted backend. Only then does the installer consume the PM2 lease and intentionally leave the proven legacy PM2 set stopped.
+
+### Partial cutover recovery
+
+Any failure after the drop/recreate boundary is a **partial cutover**, never an install success. The installer automatically revalidates and restores only the retained target rollback backup, then starts `backend` only after database validation and backend health succeed. Both backups remain available.
+
+If automatic rollback cannot be proven, leave PostgreSQL running and keep `backend` stopped. On every install failure, restore failure, cancellation, terminal abandonment, or verification failure after PM2 quiescence, database rollback completes first when needed and the installer then attempts bounded recovery of exactly the acknowledged stopped PM2 identities. Preserve `/opt/alice/backups/` unchanged, record the redacted stage/code shown by the installer, and escalate with those paths and checksums. Do not retry with a merge, a different dump, `docker compose down`, broad PM2 commands, or manual PostgreSQL service restart. Passwords, pgpass paths, raw dump output, and raw command diagnostics are intentionally not displayed.
+
+Feature rollback removes the interactive restore action and returns Migration to its validated-backup completion state. It does not delete either operator backup or change non-migration routes.
+
 ## Uninstall
 
-```sh
-# Stop and remove all containers, networks, and volumes
-docker compose \
-  -f /opt/alice-media/docker-compose.yml \
-  --env-file /opt/alice-media/.env \
-  down -v
-
-# Remove the media and config directories (DESTRUCTIVE — all data will be lost)
-sudo rm -rf /opt/alice-media /opt/alice-config
-
-# Remove the installer binary
-rm ./alice-installer
-```
-
-> **Warning**: `down -v` removes Docker volumes. All database data will be permanently deleted. Take a backup first if you need to preserve data.
+Uninstall is not implemented by the installer or its contextual menu. Do not infer a deletion procedure from this runbook. A future operation requires an approved ownership, backup, confirmation, recovery, and rollback contract before it can be documented or exposed.
 
 ---
 

@@ -14,6 +14,13 @@ import (
 // stderrLines is the maximum number of stderr tail lines to include in errors.
 const stderrLines = 20
 
+// BackendService is the only service the restore cutover may control.
+const (
+	BackendService      = "backend"
+	PostgreSQLService   = "postgresql-master"
+	PostgreSQLContainer = "alice_postgresql-master"
+)
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -26,9 +33,10 @@ type Version struct {
 
 // ServiceHealth holds the health status for a single compose service.
 type ServiceHealth struct {
-	Service string
-	Status  string // Health column: "healthy" | "unhealthy" | "starting" | "none" | ""
-	State   string // Lifecycle: "running" | "exited" | "restarting" | "paused" | "created" | "dead" | ""
+	Service   string
+	Container string
+	Status    string // Health column: "healthy" | "unhealthy" | "starting" | "none" | ""
+	State     string // Lifecycle: "running" | "exited" | "restarting" | "paused" | "created" | "dead" | ""
 }
 
 // IsReady returns true when a service is acceptable for the verify stage.
@@ -70,6 +78,8 @@ type ComposeRunner interface {
 	Up(ctx context.Context, files []string, envFile string, progress chan<- UpProgressMsg) error
 	Restart(ctx context.Context, files []string, envFile string) error
 	Down(ctx context.Context, files []string, envFile string) error
+	StopService(ctx context.Context, files []string, envFile, service string) error
+	StartService(ctx context.Context, files []string, envFile, service string) error
 	HealthStatus(ctx context.Context, files []string, envFile string) ([]ServiceHealth, error)
 }
 
@@ -186,6 +196,37 @@ func (c *CLICompose) Restart(ctx context.Context, files []string, envFile string
 	return nil
 }
 
+func validateRestoreService(service string) error {
+	if service != BackendService {
+		return fmt.Errorf("compose service control rejected")
+	}
+	return nil
+}
+
+// StopService stops the one allowlisted restore service with direct argv.
+func (c *CLICompose) StopService(ctx context.Context, files []string, envFile, service string) error {
+	if err := validateRestoreService(service); err != nil {
+		return err
+	}
+	_, _, err := c.runner.Run(ctx, "docker", baseArgs(files, envFile, "stop", BackendService)...)
+	if err != nil {
+		return fmt.Errorf("docker compose backend stop failed: %w", err)
+	}
+	return nil
+}
+
+// StartService starts the one allowlisted restore service with direct argv.
+func (c *CLICompose) StartService(ctx context.Context, files []string, envFile, service string) error {
+	if err := validateRestoreService(service); err != nil {
+		return err
+	}
+	_, _, err := c.runner.Run(ctx, "docker", baseArgs(files, envFile, "start", BackendService)...)
+	if err != nil {
+		return fmt.Errorf("docker compose backend start failed: %w", err)
+	}
+	return nil
+}
+
 // Down runs `docker compose down` (one-shot).
 func (c *CLICompose) Down(ctx context.Context, files []string, envFile string) error {
 	args := baseArgs(files, envFile, "down")
@@ -199,6 +240,7 @@ func (c *CLICompose) Down(ctx context.Context, files []string, envFile string) e
 // psLine is the shape of each JSON line from `docker compose ps --format json`.
 type psLine struct {
 	Service string `json:"Service"`
+	Name    string `json:"Name"`
 	State   string `json:"State"`
 	Health  string `json:"Health"`
 }
@@ -220,13 +262,17 @@ func (c *CLICompose) HealthStatus(ctx context.Context, files []string, envFile s
 		}
 		var row psLine
 		if jsonErr := json.Unmarshal([]byte(line), &row); jsonErr != nil {
-			continue // skip malformed lines
+			return nil, fmt.Errorf("docker compose ps returned malformed output")
 		}
 		statuses = append(statuses, ServiceHealth{
-			Service: row.Service,
-			Status:  row.Health,
-			State:   row.State,
+			Service:   row.Service,
+			Container: row.Name,
+			Status:    row.Health,
+			State:     row.State,
 		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("docker compose ps output unreadable")
 	}
 	return statuses, nil
 }

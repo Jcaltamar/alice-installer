@@ -22,6 +22,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -54,15 +55,16 @@ func buildFullFlowDeps(fw *envgen.FakeWriter, runner *compose.FakeComposeRunner)
 		MinComposeVersion: "2.0.0",
 	}
 	return Dependencies{
-		Theme:   theme.Default(),
-		OS:      &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch:    &platform.FakeArchDetector{Arch: platform.ArchAMD64},
-		GPU:     &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
-		Ports:   &ports.FakePortScanner{},
-		Docker:  &docker.FakeDockerClient{VersionVal: docker.Version{Client: "25.0.0", Server: "25.0.0"}},
-		Compose: runner,
-		Envgen:  &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "integration-password"}},
-		Writer:  fw,
+		Theme:    theme.Default(),
+		OS:       &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:     &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		GPU:      &platform.FakeGPUDetector{Info: platform.GPUInfo{ToolkitInstalled: true}},
+		Ports:    &ports.FakePortScanner{},
+		Docker:   &docker.FakeDockerClient{VersionVal: docker.Version{Client: "25.0.0", Server: "25.0.0"}},
+		Compose:  runner,
+		Envgen:   &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "integration-password"}},
+		Writer:   fw,
+		Detector: &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		Assets: TemplateAssets{
 			EnvExample: []byte("WORKSPACE=\nPOSTGRES_PASSWORD=\n"),
 		},
@@ -81,6 +83,13 @@ func buildFullFlowDeps(fw *envgen.FakeWriter, runner *compose.FakeComposeRunner)
 func sendMsg(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	updated, cmd := m.Update(msg)
 	return updated.(Model), cmd
+}
+
+func enterInstallFromSplash(m Model) (Model, tea.Cmd) {
+	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	return sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
 }
 
 // TestFullFlowHappyPath drives the entire installer flow deterministically.
@@ -104,20 +113,10 @@ func TestFullFlowHappyPath(t *testing.T) {
 
 	m := NewModel(buildFullFlowDeps(fw, runner))
 
-	// --- Step 1: Splash → press Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.state != StateSplash {
-		// Enter on splash emits PreflightStartedMsg; apply that msg next.
-	}
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Step 1: Splash → detection → contextual Install → StatePreflight ---
+	m, cmd := enterInstallFromSplash(m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: Preflight runs → PreflightResultMsg (no blocking failures) ---
@@ -408,13 +407,7 @@ func TestFullFlowUnsupportedAsteriskHostSkipsOptionAndKeepsBaseInstallUsable(t *
 func driveFullFlowToOptionalPackages(t *testing.T, m Model, workspace string) (Model, tea.Cmd) {
 	t.Helper()
 
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	started, ok := msg.(PreflightStartedMsg)
-	if !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-	m, cmd = sendMsg(m, started)
+	m, cmd := enterInstallFromSplash(m)
 	preflightResultMsg := drainCmd(cmd)
 	m, cmd = sendMsg(m, preflightResultMsg)
 	_ = cmd

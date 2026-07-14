@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/headless"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/restart"
 	"github.com/jcaltamar/alice-installer/internal/tui"
@@ -245,6 +247,53 @@ func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	}
 	if deps.ConfigDir == "" {
 		t.Error("deps.ConfigDir is empty")
+	}
+}
+
+func TestNewOperationalDependenciesExcludeInteractiveActions(t *testing.T) {
+	deps := newOperationalDependencies(context.Background(), flags{MediaDir: "/opt/alice-media", ConfigDir: "/opt/alice-config", WorkspaceDir: t.TempDir()})
+	if deps.Detector != nil || deps.UpdateAction != nil || deps.LegacyBackupAction != nil || deps.MigrationHandoff != nil {
+		t.Fatal("non-interactive dependencies must not construct contextual actions")
+	}
+}
+
+func TestNewDependencies_WiresInteractiveDetectionAndUpdate(t *testing.T) {
+	workspace := t.TempDir()
+	deps := newDependencies(context.Background(), flags{MediaDir: "/opt/alice-media", ConfigDir: "/opt/alice-config", WorkspaceDir: workspace})
+	if deps.Detector == nil {
+		t.Fatal("interactive detector is nil")
+	}
+	if deps.UpdateAction == nil {
+		t.Fatal("interactive update action is nil")
+	}
+	composite, ok := deps.Detector.(installation.CompositeDetector)
+	if !ok {
+		t.Fatalf("interactive detector = %T, want installation.CompositeDetector", deps.Detector)
+	}
+	if _, ok := composite.Legacy.(installation.LegacyFallbackProbe); !ok {
+		t.Fatalf("legacy probe = %T, want installation.LegacyFallbackProbe with known directory policy", composite.Legacy)
+	}
+	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
+		if deps.LegacyBackupAction == nil || deps.LegacyRestoreAction == nil || deps.MigrationHandoff == nil || deps.LegacyBackupRequest.ConfigEnvironment != "production" || deps.LegacyBackupRequest.Destination != "/opt/alice/backups/" {
+			t.Fatalf("supported interactive platforms must wire backup, restore, and PM2 handoff actions for /opt/alice/backups/, got %q", deps.LegacyBackupRequest.Destination)
+		}
+	} else if deps.LegacyBackupAction != nil || deps.LegacyRestoreAction != nil || deps.MigrationHandoff != nil {
+		t.Fatal("unsupported platforms must not wire backup, restore, or PM2 handoff actions")
+	}
+	// Construction must be side-effect free; the detector is invoked only by the interactive TUI command.
+}
+
+func TestRestoreActionPlatformGate(t *testing.T) {
+	for _, tt := range []struct {
+		goos, goarch string
+		want         bool
+	}{
+		{"linux", "amd64", true}, {"linux", "arm64", true},
+		{"windows", "amd64", false}, {"darwin", "arm64", false}, {"linux", "386", false},
+	} {
+		if got := restoreSupportedPlatform(tt.goos, tt.goarch); got != tt.want {
+			t.Fatalf("restoreSupportedPlatform(%q, %q) = %t, want %t", tt.goos, tt.goarch, got, tt.want)
+		}
 	}
 }
 
@@ -710,6 +759,71 @@ func TestRun_RestartModeFailureReturnsNonZero(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "restart failed") {
 		t.Fatalf("stderr = %q, want restart error", errOut.String())
+	}
+}
+
+func TestDefaultWorkspaceDirPrefersXDGConfigHome(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if got, want := defaultWorkspaceDir(), xdg+"/alice-guardian"; got != want {
+		t.Fatalf("defaultWorkspaceDir() = %q, want %q", got, want)
+	}
+}
+
+func TestRunUpdateUsesOperationalDefaultFactory(t *testing.T) {
+	runUpdateFn = func(context.Context, update.Config, update.Dependencies, io.Writer) error { return nil }
+	t.Cleanup(func() { runUpdateFn = update.Run })
+
+	code := runWithStaleCheck(
+		[]string{"update", "--workspace-dir", t.TempDir()},
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		nil,
+		func() (bootstrap.StaleGroupResult, error) { return bootstrap.StaleGroupResult{Stale: false}, nil },
+		nil,
+	)
+	if code != 0 {
+		t.Fatalf("update exit code = %d, want 0", code)
+	}
+}
+
+func TestRunStaleCheckerFailureDoesNotBlockVersion(t *testing.T) {
+	var out bytes.Buffer
+	code := runWithStaleCheck(
+		[]string{"--version"},
+		&out,
+		&bytes.Buffer{},
+		nil,
+		func() (bootstrap.StaleGroupResult, error) {
+			return bootstrap.StaleGroupResult{}, errors.New("unavailable")
+		},
+		nil,
+	)
+	if code != 0 || !strings.Contains(out.String(), version) {
+		t.Fatalf("version with unavailable stale check: code=%d output=%q", code, out.String())
+	}
+}
+
+func TestReloginAndTTYGuards(t *testing.T) {
+	if !isReloginRequired(headless.ErrReloginRequired) {
+		t.Fatal("ErrReloginRequired must be recognized")
+	}
+	if isReloginRequired(errors.New("other")) {
+		t.Fatal("unrelated error must not be recognized as relogin required")
+	}
+	file, err := os.CreateTemp(t.TempDir(), "regular-file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if isTTY(file) {
+		t.Fatal("regular file must not be treated as a terminal")
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if isTTY(file) {
+		t.Fatal("an unreadable file descriptor must not be treated as a terminal")
 	}
 }
 

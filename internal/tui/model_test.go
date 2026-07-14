@@ -8,6 +8,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -40,6 +41,7 @@ func buildTestDeps() Dependencies {
 		Compose:              &compose.FakeComposeRunner{},
 		Envgen:               &envgen.Templater{PasswordGen: &secrets.FakeGenerator{Val: "secret"}},
 		Writer:               &envgen.FakeWriter{Written: make(map[string][]byte)},
+		Detector:             &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}},
 		PreflightCoordinator: coord,
 		// Default env: docker binary present, user in group, no systemd.
 		// This makes CheckDockerDaemon FAIL non-fixable by default.

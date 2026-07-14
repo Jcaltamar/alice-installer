@@ -248,7 +248,7 @@ func TestCLICompose_Down_ErrorPropagated(t *testing.T) {
 
 func TestCLICompose_HealthStatus_ParsesJSONLines(t *testing.T) {
 	// docker compose ps --format json returns one JSON object per line
-	psOutput := `{"Service":"backend","Health":"healthy"}
+	psOutput := `{"Service":"backend","Name":"alice_backend","Health":"healthy"}
 {"Service":"websocket","Health":"starting"}
 `
 	runner := &platform.FakeCommandRunner{
@@ -267,6 +267,9 @@ func TestCLICompose_HealthStatus_ParsesJSONLines(t *testing.T) {
 	}
 	if statuses[0].Service != "backend" {
 		t.Errorf("statuses[0].Service = %q, want backend", statuses[0].Service)
+	}
+	if statuses[0].Container != "alice_backend" {
+		t.Errorf("statuses[0].Container = %q, want alice_backend", statuses[0].Container)
 	}
 	if statuses[0].Status != "healthy" {
 		t.Errorf("statuses[0].Status = %q, want healthy", statuses[0].Status)
@@ -315,6 +318,21 @@ func TestCLICompose_HealthStatus_ParsesStateField(t *testing.T) {
 	}
 }
 
+func TestCLICompose_HealthStatusRejectsMixedMalformedJSONEvidence(t *testing.T) {
+	valid := `{"Service":"postgresql-master","Name":"alice_postgresql-master","State":"running"}`
+	for _, invalid := range []string{"not-json", `{"Service":1}`, valid + " trailing"} {
+		t.Run(invalid, func(t *testing.T) {
+			runner := &platform.FakeCommandRunner{Outputs: map[string]platform.FakeCmdOutput{
+				"docker": {Stdout: []byte(valid + "\n" + invalid + "\n")},
+			}}
+			statuses, err := compose.NewCLICompose(runner, nil).HealthStatus(context.Background(), []string{"docker-compose.yml"}, ".env")
+			if err == nil || statuses != nil {
+				t.Fatalf("mixed malformed evidence = %v, %v; want rejection without partial records", statuses, err)
+			}
+		})
+	}
+}
+
 func TestCLICompose_HealthStatus_ErrorPropagated(t *testing.T) {
 	wantErr := errors.New("ps failed")
 	runner := &platform.FakeCommandRunner{
@@ -334,9 +352,62 @@ func TestCLICompose_HealthStatus_ErrorPropagated(t *testing.T) {
 // FakeComposeRunner
 // ---------------------------------------------------------------------------
 
+func TestCLICompose_ServiceControlUsesBackendOnlyDirectArgv(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*compose.CLICompose) error
+		want []string
+	}{
+		{"stop", func(c *compose.CLICompose) error {
+			return c.StopService(context.Background(), []string{"base.yml", "site.yml"}, ".env", compose.BackendService)
+		}, []string{"compose", "-f", "base.yml", "-f", "site.yml", "--env-file", ".env", "stop", "backend"}},
+		{"start", func(c *compose.CLICompose) error {
+			return c.StartService(context.Background(), []string{"base.yml", "site.yml"}, ".env", compose.BackendService)
+		}, []string{"compose", "-f", "base.yml", "-f", "site.yml", "--env-file", ".env", "start", "backend"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &platform.FakeCommandRunner{}
+			if err := tt.call(compose.NewCLICompose(runner, nil)); err != nil {
+				t.Fatalf("service control error = %v", err)
+			}
+			if runner.LastName != "docker" || !equalArgs(runner.LastArgs, tt.want) {
+				t.Fatalf("command = %q %v, want docker %v", runner.LastName, runner.LastArgs, tt.want)
+			}
+		})
+	}
+}
+
+func TestCLICompose_ServiceControlRejectsUnsafeServicesWithoutExecution(t *testing.T) {
+	for _, service := range []string{"", " ", "backend postgresql-master", "postgresql-master", "alice_backend", "down", "restart"} {
+		t.Run(service, func(t *testing.T) {
+			runner := &platform.FakeCommandRunner{}
+			err := compose.NewCLICompose(runner, nil).StopService(context.Background(), []string{"compose.yml"}, ".env", service)
+			if err == nil {
+				t.Fatal("StopService() error = nil, want bounded rejection")
+			}
+			if runner.LastName != "" || len(runner.LastArgs) != 0 {
+				t.Fatalf("unsafe service executed %q %v", runner.LastName, runner.LastArgs)
+			}
+		})
+	}
+}
+
 func TestFakeComposeRunner_ImplementsInterface(t *testing.T) {
 	var _ compose.ComposeRunner = &compose.FakeComposeRunner{}
 	t.Log("FakeComposeRunner implements ComposeRunner")
+}
+
+func equalArgs(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestFakeComposeRunner_PullSendsProgressAndReturnsErr(t *testing.T) {

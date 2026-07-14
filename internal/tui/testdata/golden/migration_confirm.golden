@@ -1,0 +1,13 @@
+[1;38;2;34;211;238mReview PostgreSQL backup[0m
+
+Selected environment: 
+Endpoint: :0
+Database: 
+User: 
+Container ID: 
+Image: 
+Destination: 
+
+No backup artifact has been created. Confirm to create a validated backup in the protected destination.
+
+Press Enter to confirm or Escape to cancel.
