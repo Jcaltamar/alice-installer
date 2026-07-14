@@ -286,6 +286,31 @@ func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	}
 }
 
+func TestNewOperationalDependenciesExcludeContextualActions(t *testing.T) {
+	deps := newOperationalDependencies(context.Background(), flags{MediaDir: "/opt/alice-media", ConfigDir: "/opt/alice-config", WorkspaceDir: t.TempDir()})
+	if deps.Detector != nil || deps.UpdateAction != nil {
+		t.Fatal("operational dependencies must not construct contextual actions")
+	}
+}
+
+func TestNewDependencies_WiresInteractiveDetectionAndUpdate(t *testing.T) {
+	workspace := t.TempDir()
+	deps := newDependencies(context.Background(), flags{MediaDir: "/opt/alice-media", ConfigDir: "/opt/alice-config", WorkspaceDir: workspace})
+	if deps.Detector == nil || deps.UpdateAction == nil {
+		t.Fatal("interactive contextual dependencies must be wired")
+	}
+	composite, ok := deps.Detector.(installation.CompositeDetector)
+	if !ok {
+		t.Fatalf("interactive detector = %T, want installation.CompositeDetector", deps.Detector)
+	}
+	if _, ok := composite.Current.(installation.WorkspaceProbe); !ok {
+		t.Fatalf("current probe = %T, want installation.WorkspaceProbe", composite.Current)
+	}
+	if _, ok := composite.Legacy.(installation.LegacyFallbackProbe); !ok {
+		t.Fatalf("legacy probe = %T, want installation.LegacyFallbackProbe", composite.Legacy)
+	}
+}
+
 func TestNewDependencies_WiresAsteriskInstallerOptionsAndAvailability(t *testing.T) {
 	restore := replaceAsteriskHostDetector(func() asterisk.HostDetector {
 		return &asterisk.FakeDetector{State: asterisk.SupportedHost(asterisk.PackageManagerAPT)}
