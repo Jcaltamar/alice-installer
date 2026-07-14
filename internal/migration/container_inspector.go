@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -83,6 +84,7 @@ type dockerInspect struct {
 			Aliases []string `json:"Aliases"`
 		} `json:"Networks"`
 		Ports map[string][]struct {
+			HostIP   string `json:"HostIp"`
 			HostPort string `json:"HostPort"`
 		} `json:"Ports"`
 	} `json:"NetworkSettings"`
@@ -130,14 +132,40 @@ func safeDetails(raw dockerInspect) (ContainerDetails, bool) {
 			details.Endpoints = append(details.Endpoints, ContainerEndpoint{Host: alias, Port: 5432, ContainerLocal: true})
 		}
 	}
-	for port := range raw.NetworkSettings.Ports {
+	const maxPublishedBindings = 64
+	for port, bindings := range raw.NetworkSettings.Ports {
 		number, protocol, found := strings.Cut(port, "/")
 		parsed, err := strconv.Atoi(number)
-		if !found || protocol != "tcp" || err != nil {
+		if !found || err != nil || parsed < 1 || parsed > 65535 {
 			return ContainerDetails{}, false
 		}
-		// Published ports are deliberately not endpoints: host mapping never proves container-local routing.
-		_ = parsed
+		if protocol != "tcp" {
+			continue
+		}
+		for _, binding := range bindings {
+			hostPort, err := strconv.Atoi(binding.HostPort)
+			if binding.HostIP == "" || err != nil || hostPort < 1 || hostPort > 65535 || len(details.PublishedPorts) >= maxPublishedBindings {
+				return ContainerDetails{}, false
+			}
+			details.PublishedPorts = append(details.PublishedPorts, PublishedPortBinding{HostIP: binding.HostIP, HostPort: hostPort, ContainerPort: parsed})
+		}
 	}
+	sort.Slice(details.PublishedPorts, func(i, j int) bool {
+		a, b := details.PublishedPorts[i], details.PublishedPorts[j]
+		if a.ContainerPort != b.ContainerPort {
+			return a.ContainerPort < b.ContainerPort
+		}
+		if a.HostPort != b.HostPort {
+			return a.HostPort < b.HostPort
+		}
+		return a.HostIP < b.HostIP
+	})
+	deduplicated := details.PublishedPorts[:0]
+	for _, binding := range details.PublishedPorts {
+		if len(deduplicated) == 0 || deduplicated[len(deduplicated)-1] != binding {
+			deduplicated = append(deduplicated, binding)
+		}
+	}
+	details.PublishedPorts = deduplicated
 	return details, true
 }

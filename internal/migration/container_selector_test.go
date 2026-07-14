@@ -93,6 +93,86 @@ func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *test
 	}
 }
 
+func TestDiscoverContainerSupportsStrictEndpointModes(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	base := ContainerDetails{ID: id, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthHealthy, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, MountKinds: []string{"bitnami-postgresql-data"}}
+	binding := func(hostIP string, hostPort, containerPort int) []PublishedPortBinding {
+		return []PublishedPortBinding{{HostIP: hostIP, HostPort: hostPort, ContainerPort: containerPort}}
+	}
+
+	for _, tt := range []struct {
+		name    string
+		config  ResolvedConfig
+		mutate  func(ContainerDetails) ContainerDetails
+		wantErr error
+	}{
+		{"internal alias", ResolvedConfig{Host: "postgres", Port: 5432, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.Endpoints = []ContainerEndpoint{{Host: "postgres", Port: 5432, ContainerLocal: true}}
+			return d
+		}, nil},
+		{"IPv4 loopback published port", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails { d.PublishedPorts = binding("0.0.0.0", 5435, 5432); return d }, nil},
+		{"localhost published port", ResolvedConfig{Host: "localhost", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			return d
+		}, nil},
+		{"IPv6 loopback published port", ResolvedConfig{Host: "::1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails { d.PublishedPorts = binding("::", 5435, 5432); return d }, nil},
+		{"wrong host port", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails { d.PublishedPorts = binding("0.0.0.0", 5436, 5432); return d }, ErrContainerEndpoint},
+		{"wrong container port", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails { d.PublishedPorts = binding("0.0.0.0", 5435, 5433); return d }, ErrContainerEndpoint},
+		{"non-loopback config", ResolvedConfig{Host: "192.0.2.10", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails { d.PublishedPorts = binding("0.0.0.0", 5435, 5432); return d }, ErrContainerEndpoint},
+		{"unrelated specific binding", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("192.0.2.10", 5435, 5432)
+			return d
+		}, ErrContainerEndpoint},
+		{"wrong database", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "other", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			return d
+		}, ErrContainerIdentity},
+		{"wrong user", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "other"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			return d
+		}, ErrContainerIdentity},
+		{"stopped", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			d.State = ContainerStopped
+			return d
+		}, ErrContainerUnsafeState},
+		{"unhealthy", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			d.Health = HealthUnhealthy
+			return d
+		}, ErrContainerUnsafeState},
+		{"missing provenance", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
+			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
+			d.MountKinds = nil
+			return d
+		}, ErrContainerUnsafeState},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			details := tt.mutate(base)
+			got, err := DiscoverContainer(context.Background(), &fakeInspector{candidates: []ContainerSummary{{ID: id, Image: string(PostgreSQL11Image)}}, details: map[string]ContainerDetails{id: details}}, tt.config)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("DiscoverContainer() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr == nil && got.ID != id {
+				t.Fatalf("selected ID = %q, want %q", got.ID, id)
+			}
+			assertNoDockerLeak(t, got, err)
+		})
+	}
+}
+
+func TestDiscoverContainerRejectsAmbiguousPublishedEndpoint(t *testing.T) {
+	id1, id2 := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	config := ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}
+	details := func(id string) ContainerDetails {
+		return ContainerDetails{ID: id, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthNone, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, PublishedPorts: []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}}, Labels: SafeContainerLabels{ComposeService: "postgresql"}}
+	}
+	_, err := DiscoverContainer(context.Background(), &fakeInspector{candidates: []ContainerSummary{{ID: id1, Image: string(PostgreSQL11Image)}, {ID: id2, Image: string(PostgreSQL11Image)}}, details: map[string]ContainerDetails{id1: details(id1), id2: details(id2)}}, config)
+	if !errors.Is(err, ErrAmbiguousContainer) {
+		t.Fatalf("DiscoverContainer() error = %v, want %v", err, ErrAmbiguousContainer)
+	}
+}
+
 func TestDockerCLIInspectorRedactsSensitiveMountData(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	inspect := `[{"Id":"` + id + `","Config":{"Image":"bitnami/postgresql:11-debian-10","Labels":{}},"State":{"Running":true},"Mounts":[{"Name":"private-volume","Destination":"/private/synthetic-secret-must-not-escape"},{"Name":"bitnami-postgresql-data","Destination":"/bitnami/postgresql"}]}]`
@@ -166,12 +246,30 @@ func TestDockerCLIInspectorParsesOnlyAllowlistedMetadata(t *testing.T) {
 		t.Fatalf("Candidates() = %#v, %v", candidates, err)
 	}
 	details, err := inspector.Inspect(context.Background(), id)
-	if err != nil || details.Health != HealthHealthy || len(details.DatabaseNames) != 1 || details.DatabaseNames[0] != "alice" || details.Labels.ComposeService != "postgresql" {
+	if err != nil || details.Health != HealthHealthy || len(details.DatabaseNames) != 1 || details.DatabaseNames[0] != "alice" || details.Labels.ComposeService != "postgresql" || len(details.PublishedPorts) != 1 || details.PublishedPorts[0] != (PublishedPortBinding{HostIP: "127.0.0.1", HostPort: 5432, ContainerPort: 5432}) {
 		t.Fatalf("Inspect() = %#v, %v", details, err)
 	}
 	assertNoDockerLeak(t, details, candidates, err)
 	if len(runner.calls) != 2 || runner.calls[0] != "docker ps --all --no-trunc --format {{.ID}}\t{{.Image}}" || runner.calls[1] != "docker inspect "+id {
 		t.Fatalf("calls = %v", runner.calls)
+	}
+}
+
+func TestDockerCLIInspectorNormalizesPublishedBindings(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	inspect := `[{"Id":"` + id + `","Config":{"Image":"bitnami/postgresql:11-debian-10"},"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostIp":"::","HostPort":"5435"},{"HostIp":"0.0.0.0","HostPort":"5435"},{"HostIp":"0.0.0.0","HostPort":"5435"}]}}}]`
+	details, ok := safeDetails(dockerInspectFromJSON(t, inspect))
+	want := []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}, {HostIP: "::", HostPort: 5435, ContainerPort: 5432}}
+	if !ok || fmt.Sprint(details.PublishedPorts) != fmt.Sprint(want) {
+		t.Fatalf("safeDetails() published ports = %#v, %v; want %#v", details.PublishedPorts, ok, want)
+	}
+}
+
+func TestDockerCLIInspectorRejectsEmptyPublishedBinding(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	inspect := `[{"Id":"` + id + `","Config":{"Image":"bitnami/postgresql:11-debian-10"},"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostIp":"","HostPort":"5435"}]}}}]`
+	if details, ok := safeDetails(dockerInspectFromJSON(t, inspect)); ok {
+		t.Fatalf("safeDetails() = %#v, want rejection", details)
 	}
 }
 
