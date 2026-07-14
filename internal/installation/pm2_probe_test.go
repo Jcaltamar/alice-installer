@@ -64,16 +64,37 @@ func TestPM2Probe_UnsupportedDoesNotRunCommand(t *testing.T) {
 }
 
 func TestPM2Probe_CommandFailureIsUncertain(t *testing.T) {
-	got := PM2Probe{Runner: &fakeRunner{err: errors.New("permission denied")}, Platform: Platform{GOOS: "linux", GOARCH: "arm64"}}.Probe(context.Background())
+	policy := LegacyPolicy{ProcessNames: []string{"alice"}, DeploymentRoots: []string{"/opt/alice"}}
+	got := PM2Probe{Runner: &fakeRunner{err: errors.New("permission denied")}, Platform: Platform{GOOS: "linux", GOARCH: "arm64"}, Policy: policy}.Probe(context.Background())
 	if got.Presence != PresenceUncertain || got.Evidence[0].Kind != EvidencePM2Failed {
 		t.Fatalf("Probe() = %#v", got)
 	}
 }
 
-func TestPM2Probe_EmptyPolicyIsUncertain(t *testing.T) {
-	got := PM2Probe{Runner: &fakeRunner{stdout: []byte(`[]`)}, Platform: Platform{GOOS: "linux", GOARCH: "amd64"}}.Probe(context.Background())
-	if got.Presence != PresenceUncertain || got.Evidence[0].Kind != EvidencePM2Failed {
-		t.Fatalf("Probe() = %#v, want configuration uncertainty", got)
+func TestPM2Probe_EmptyPolicyIsDisabled(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`[]`)}
+	got := PM2Probe{Runner: runner, Platform: Platform{GOOS: "linux", GOARCH: "amd64"}}.Probe(context.Background())
+	if got.Presence != PresenceAbsent || got.Evidence[0].Kind != EvidencePM2Absent || runner.name != "" {
+		t.Fatalf("Probe() = %#v, runner = %#v; want disabled absence", got, runner)
+	}
+}
+
+func TestPM2Probe_PartialPolicyIsUncertain(t *testing.T) {
+	runner := &fakeRunner{}
+	got := PM2Probe{Runner: runner, Platform: Platform{GOOS: "linux", GOARCH: "amd64"}, Policy: LegacyPolicy{ProcessNames: []string{"alice"}}}.Probe(context.Background())
+	if got.Presence != PresenceUncertain || got.Evidence[0].Kind != EvidencePM2Failed || runner.name != "" {
+		t.Fatalf("Probe() = %#v, runner = %#v; want invalid-policy uncertainty", got, runner)
+	}
+}
+
+func TestLegacyFallbackProbe_AbsentDirectoryAndDisabledPM2IsAbsent(t *testing.T) {
+	runner := &fakeRunner{}
+	got := (LegacyFallbackProbe{
+		Directory: fakeProbe{ProbeResult{Presence: PresenceAbsent}},
+		PM2:       PM2Probe{Runner: runner, Platform: Platform{GOOS: "linux", GOARCH: "amd64"}},
+	}).Probe(context.Background())
+	if got.Presence != PresenceAbsent || runner.name != "" {
+		t.Fatalf("Probe() = %#v, runner = %#v; want absence without command", got, runner)
 	}
 }
 

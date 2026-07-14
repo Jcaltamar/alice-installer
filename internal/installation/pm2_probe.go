@@ -43,6 +43,9 @@ func (p PM2Probe) Probe(ctx context.Context) ProbeResult {
 	if p.Platform.GOOS != "linux" || (p.Platform.GOARCH != "amd64" && p.Platform.GOARCH != "arm64") {
 		return pm2Result(PresenceUnsupported, EvidencePM2Unsupported, "legacy PM2 probing is unsupported on this platform")
 	}
+	if p.Policy.empty() {
+		return pm2Result(PresenceAbsent, EvidencePM2Absent, "legacy PM2 probing is disabled")
+	}
 	if p.Runner == nil {
 		return pm2Result(PresenceUncertain, EvidencePM2Failed, "legacy PM2 probe is unavailable")
 	}
@@ -81,6 +84,10 @@ func (p PM2Probe) Probe(ctx context.Context) ProbeResult {
 		return pm2Result(PresenceUncertain, EvidencePM2Ambiguous, "PM2 evidence requires manual verification")
 	}
 	return pm2Result(PresenceAbsent, EvidencePM2Absent, "no configured Alice PM2 deployment found")
+}
+
+func (p LegacyPolicy) empty() bool {
+	return len(p.ProcessNames) == 0 && len(p.ScriptBasenames) == 0 && len(p.DeploymentRoots) == 0 && len(p.EcosystemFiles) == 0
 }
 
 func (p LegacyPolicy) valid() bool {

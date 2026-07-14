@@ -30,6 +30,11 @@ const (
 	EvidencePM2Unsupported
 	EvidencePM2Ambiguous
 	EvidencePM2Failed
+	EvidenceLegacyDirectory
+	EvidenceLegacyDirectoryAbsent
+	EvidenceLegacyDirectoryInvalid
+	EvidenceLegacyDirectoryUnreadable
+	EvidenceLegacyDirectoryUnsupported
 )
 
 // Evidence is safe to display: it never contains artifact contents or process metadata.
