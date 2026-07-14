@@ -20,6 +20,21 @@ alice-installer update   # refresh an existing deployment in-place
 alice-installer restart  # restart existing services in-place
 ```
 
+## Interactive installation detection
+
+After the splash screen, interactive mode performs a read-only check before install preflight. It renders only fixed evidence categories; artifact contents, PM2 output, environment values, and command errors are never displayed.
+
+| Detected state | Available action |
+| --- | --- |
+| No current or known legacy evidence | Install |
+| Complete current Compose artifacts | Update; Uninstall is visible but blocked |
+| Exact known legacy directory or configured legacy PM2 evidence | Migration is visible but blocked |
+| Partial, conflicting, unreadable, or ambiguous evidence | No lifecycle action; verify the host manually |
+
+Current detection checks `.env` and `docker-compose.yml` under `--workspace-dir`. Legacy detection is supported on Linux amd64/arm64 and checks the exact known legacy directory before the optional PM2 fallback. The PM2 policy is intentionally empty until historical identifiers are confirmed, so generic PM2 processes never qualify.
+
+Use the explicit `update` or `restart` command only when its existing artifact requirements are satisfied. Uninstall and Migration remain informational and do not modify files, processes, or services.
+
 ## Update or restart an existing installation
 
 Use `alice-installer update` to refresh containers using the existing workspace artifacts from a prior install.
@@ -112,6 +127,7 @@ FULL_DEPLOY=1 make e2e     # full mode — pulls images (~3 GB) and brings servi
 ```
 
 The basic mode validates:
+
 - Docker is installed and the `docker compose` plugin works
 - `testuser` is added to the `docker` group
 - `/opt/alice-media` and `/opt/alice-config` are created and writable

@@ -169,6 +169,14 @@ Read the release notes and `RUNBOOK.md` for the new version before upgrading. Pa
 
 ---
 
+## Contextual installation menu
+
+Interactive mode performs read-only detection after the splash screen and before preflight. It checks the selected `--workspace-dir` for `.env` and `docker-compose.yml`. Partial, unreadable, malformed, conflicting, or ambiguous evidence blocks lifecycle actions rather than treating the host as clean.
+
+On Linux amd64/arm64, legacy detection checks the exact known Alice directory before an optional PM2 fallback. PM2 requires configured Alice-specific identifiers with corroborating deployment roots; the production PM2 policy remains empty until those identifiers are confirmed. Generic PM2 processes never qualify, and unsupported platforms never infer positive legacy evidence.
+
+Use the explicit `update` or `restart` commands only when their existing artifact requirements are met. Contextual Uninstall and Migration are informational and blocked; selecting them executes no lifecycle command.
+
 ## Uninstall
 
 ```sh

@@ -284,6 +284,31 @@ func TestRootRejectsLateTransitionMessages(t *testing.T) {
 	}
 }
 
+func TestRootContextualViewsAndFallbacks(t *testing.T) {
+	deps := buildTestDeps()
+	deps.Detector = &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}}
+	m := NewModel(deps)
+	updated, cmd := m.Update(DetectionStartedMsg{})
+	m = updated.(Model)
+	if !strings.Contains(m.View(), "Detecting existing installation") || cmd == nil {
+		t.Fatal("detection state must render while its command is pending")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.contextMenu.detection.State != installation.StateNotInstalled {
+		t.Fatalf("detector state = %v", m.contextMenu.detection.State)
+	}
+	m.state = StateUpdating
+	if !strings.Contains(m.View(), "Updating existing installation") {
+		t.Fatal("updating state must render progress")
+	}
+	m.state = StateActionResult
+	m.actionResult = actionResultModel{theme: m.deps.Theme}
+	if !strings.Contains(m.View(), "Update completed") {
+		t.Fatal("successful update result must be rendered")
+	}
+}
+
 func TestContextualStatesUseGlobalGuards(t *testing.T) {
 	m := NewModel(buildTestDeps())
 	m.state = StateContextMenu
