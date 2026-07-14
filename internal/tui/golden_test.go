@@ -22,6 +22,7 @@ import (
 
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
 	"github.com/jcaltamar/alice-installer/internal/secrets"
@@ -186,6 +187,27 @@ func TestGoldenResultFailure(t *testing.T) {
 	m := NewResultModel(theme.Default(), nil, failure)
 	view := m.View()
 	goldenAssert(t, "result_failure", view)
+}
+
+func TestGoldenContextMenus(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		detection installation.Detection
+	}{
+		{"context_not_installed", installation.Detection{State: installation.StateNotInstalled, Evidence: []installation.Evidence{{Kind: installation.EvidenceWorkspaceAbsent}, {Kind: installation.EvidencePM2Unavailable}}}},
+		{"context_current", installation.Detection{State: installation.StateCurrent, Evidence: []installation.Evidence{{Kind: installation.EvidenceWorkspaceComplete}, {Kind: installation.EvidencePM2Absent}}}},
+		{"context_legacy", installation.Detection{State: installation.StateLegacyPM2, Evidence: []installation.Evidence{{Kind: installation.EvidenceWorkspaceAbsent}, {Kind: installation.EvidencePM2AliceProcess}}}},
+		{"context_conflict", installation.Detection{State: installation.StateConflict, Evidence: []installation.Evidence{{Kind: installation.EvidenceWorkspaceComplete}, {Kind: installation.EvidencePM2AliceProcess}}}},
+		{"context_unknown", installation.Detection{State: installation.StateUnknown, Evidence: []installation.Evidence{{Kind: installation.EvidenceWorkspaceUnreadable}, {Kind: installation.EvidencePM2Failed}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			goldenAssert(t, tt.name, NewContextMenuModel(theme.Default(), tt.detection).View())
+		})
+	}
+}
+
+func TestGoldenBlockedOperation(t *testing.T) {
+	goldenAssert(t, "context_blocked", blockedOperationModel{theme: theme.Default(), action: ContextActionUninstall}.View())
 }
 
 // goldenTestErr is a simple error type for golden file tests.
