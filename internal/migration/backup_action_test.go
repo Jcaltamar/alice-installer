@@ -28,6 +28,14 @@ func TestBackupActionRequiresConfirmationBeforeCreatingDestination(t *testing.T)
 	if result.Outcome != BackupValidated {
 		t.Fatalf("Run() outcome = %#v", result)
 	}
+	if len(result.Stages) != int(BackupStagePublication)+1 {
+		t.Fatalf("validated stages = %#v", result.Stages)
+	}
+	for _, stage := range result.Stages {
+		if stage.Status != BackupStagePassed {
+			t.Fatalf("validated stage = %#v, want passed", stage)
+		}
+	}
 	for _, path := range []string{result.DumpPath, result.ManifestPath} {
 		info, err := os.Stat(path)
 		if err != nil || info.Mode().Perm() != 0o600 {
@@ -78,6 +86,20 @@ func TestBackupActionValidationFailureRemovesStaging(t *testing.T) {
 	result := action.Run(context.Background(), plan)
 	if result.Outcome != BackupValidationFailed || result.DumpPath != "" || result.ManifestPath != "" || result.SHA256 != "" || result.Size != 0 {
 		t.Fatalf("validation failure result = %#v", result)
+	}
+	if result.FailureCode != BackupFailureArchiveValidation || result.Remediation != BackupRemediationArchive {
+		t.Fatalf("validation diagnostics = %#v", result)
+	}
+	for _, stage := range result.Stages {
+		want := BackupStagePassed
+		if stage.Stage == BackupStageArchiveValidation {
+			want = BackupStageFailed
+		} else if stage.Stage > BackupStageArchiveValidation {
+			want = BackupStageNotRun
+		}
+		if stage.Status != want {
+			t.Fatalf("validation stage = %#v, want status %v", stage, want)
+		}
 	}
 	entries, err := os.ReadDir(destination)
 	if err != nil {

@@ -41,6 +41,28 @@ func TestPG11ArchiveValidatorUsesPinnedRestoreListWithoutDatabaseConnection(t *t
 	}
 }
 
+func TestPG11ArchiveValidatorAcceptsDockerAutoRemovalWithRealExecutor(t *testing.T) {
+	dump := filepath.Join(t.TempDir(), "staged.dump.part")
+	if err := os.WriteFile(dump, []byte("custom dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	docker := "#!/bin/sh\n" +
+		"if [ \"$1\" = run ]; then printf '; Archive created\\n1; 0 0 TABLE public alice\\n'; exit 0; fi\n" +
+		"if [ \"$1\" = rm ]; then echo 'Error response from daemon: No such container: auto-removed' >&2; exit 1; fi\n" +
+		"exit 2\n"
+	if err := os.WriteFile(dockerPath, []byte(docker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	validator := PG11ArchiveValidator{Executor: OSBinaryExecutor{}, Timeout: time.Second}
+	if err := validator.Validate(context.Background(), dump); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestPG11ArchiveValidatorRejectsEmptyMalformedAndFailedListings(t *testing.T) {
 	dump := filepath.Join(t.TempDir(), "staged.dump.part")
 	if err := os.WriteFile(dump, []byte("custom dump"), 0o600); err != nil {

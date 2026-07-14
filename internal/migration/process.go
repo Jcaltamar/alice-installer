@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -206,10 +207,10 @@ func CleanupHelper(ctx context.Context, executor BinaryExecutor, run HelperRun) 
 		return ErrProcessPrecondition
 	}
 	result := executor.Run(ctx, run.CleanupSpec(), io.Discard)
-	if result.Outcome != ProcessSucceeded {
-		return ErrProcessPrecondition
+	if result.Outcome == ProcessSucceeded || result.Outcome == ProcessFailed && result.StderrCode == "docker-container-absent" {
+		return nil
 	}
-	return nil
+	return ErrProcessPrecondition
 }
 
 // RunHelper owns every terminal cleanup path: reconciliation is attempted even
@@ -247,4 +248,11 @@ func (b *boundedStderr) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
-func classifyStderr(_ *boundedStderr) string { return "process-failed" }
+func classifyStderr(stderr *boundedStderr) string {
+	stderr.mu.Lock()
+	defer stderr.mu.Unlock()
+	if bytes.Contains(stderr.data, []byte("No such container:")) {
+		return "docker-container-absent"
+	}
+	return "process-failed"
+}

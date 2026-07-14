@@ -27,6 +27,116 @@ const (
 	BackupValidationFailed
 )
 
+type BackupStage uint8
+
+const (
+	BackupStageDestination BackupStage = iota
+	BackupStageCredentials
+	BackupStageDump
+	BackupStageStagedFile
+	BackupStageArchiveValidation
+	BackupStagePublication
+)
+
+func (s BackupStage) String() string {
+	labels := [...]string{
+		"Destination preparation",
+		"Credential preparation",
+		"Dump execution",
+		"Staged file sync and non-empty check",
+		"Archive validation",
+		"Publication, checksum, and manifest",
+	}
+	if int(s) >= len(labels) {
+		return "Unknown stage"
+	}
+	return labels[s]
+}
+
+type BackupStageStatus uint8
+
+const (
+	BackupStageNotRun BackupStageStatus = iota
+	BackupStagePassed
+	BackupStageFailed
+)
+
+func (s BackupStageStatus) String() string {
+	if s == BackupStagePassed {
+		return "passed"
+	}
+	if s == BackupStageFailed {
+		return "failed"
+	}
+	return "not run"
+}
+
+type BackupStageResult struct {
+	Stage  BackupStage
+	Status BackupStageStatus
+}
+
+type BackupFailureCode uint8
+
+const (
+	BackupFailureNone BackupFailureCode = iota
+	BackupFailurePrecondition
+	BackupFailureCancelled
+	BackupFailureDestination
+	BackupFailureCredentials
+	BackupFailureHelperPrecondition
+	BackupFailureDumpTimeout
+	BackupFailureDump
+	BackupFailureHelperCleanup
+	BackupFailureStagedSync
+	BackupFailureStagedClose
+	BackupFailureStagedEmpty
+	BackupFailureArchiveValidation
+	BackupFailurePublication
+)
+
+func (c BackupFailureCode) String() string {
+	codes := [...]string{"", "backup-precondition", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
+	if int(c) >= len(codes) || c == BackupFailureNone {
+		return "backup-failed"
+	}
+	return codes[c]
+}
+
+type BackupRemediation uint8
+
+const (
+	BackupRemediationNone BackupRemediation = iota
+	BackupRemediationRetry
+	BackupRemediationPrerequisites
+	BackupRemediationDestination
+	BackupRemediationCredentials
+	BackupRemediationHelperImage
+	BackupRemediationDatabase
+	BackupRemediationDocker
+	BackupRemediationStorage
+	BackupRemediationArchive
+)
+
+func (r BackupRemediation) String() string {
+	hints := [...]string{
+		"Review backup prerequisites and retry; do not continue migration.",
+		"Retry the backup when ready.",
+		"Verify the legacy database and backup destination, then retry.",
+		"Verify destination permissions and free space, then retry.",
+		"Verify local credential-file permissions, then retry.",
+		"Verify the approved PostgreSQL helper image is available, then retry.",
+		"Verify database availability and retry the backup.",
+		"Verify Docker and the legacy database are available, then retry.",
+		"Verify destination storage health and free space, then retry.",
+		"Verify the pinned PostgreSQL helper image and retry; do not continue migration.",
+	}
+	if int(r) >= len(hints) {
+		return hints[0]
+	}
+	return hints[r]
+}
+
 type BackupRequest struct {
 	Destination       string
 	SourceRoots       []string
@@ -88,7 +198,26 @@ type BackupResult struct {
 	ManifestPath string
 	SHA256       string
 	Size         int64
-	Message      string
+	Stages       []BackupStageResult
+	FailureCode  BackupFailureCode
+	Remediation  BackupRemediation
+}
+
+func newBackupDiagnostics() []BackupStageResult {
+	stages := make([]BackupStageResult, int(BackupStagePublication)+1)
+	for stage := range stages {
+		stages[stage].Stage = BackupStage(stage)
+	}
+	return stages
+}
+
+func backupFailure(outcome BackupOutcome, stages []BackupStageResult, failed BackupStage, code BackupFailureCode, remediation BackupRemediation) BackupResult {
+	stages[failed].Status = BackupStageFailed
+	return BackupResult{Outcome: outcome, Stages: stages, FailureCode: code, Remediation: remediation}
+}
+
+func BackupPreflightFailureResult() BackupResult {
+	return backupFailure(BackupPreconditionFailed, newBackupDiagnostics(), BackupStageDestination, BackupFailurePrecondition, BackupRemediationPrerequisites)
 }
 
 func (r BackupResult) String() string {
@@ -150,16 +279,18 @@ func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (Bac
 // Run is intentionally limited to unvalidated staging. Slice 4.5 owns archive
 // validation, checksum, manifest construction, and every final rename.
 func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
+	stages := newBackupDiagnostics()
 	if ctx.Err() != nil {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageDestination, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	if a.Store == nil || a.Executor == nil || a.Validator == nil || !validConfig(plan.config) || plan.container.Image != PostgreSQL11Image || !fullContainerID.MatchString(plan.container.ID) {
-		return BackupResult{Outcome: BackupPreconditionFailed, Message: "backup precondition failed"}
+		return backupFailure(BackupPreconditionFailed, stages, BackupStageDestination, BackupFailurePrecondition, BackupRemediationPrerequisites)
 	}
 	staged, err := a.Store.Prepare(ctx, plan.destination)
 	if err != nil {
-		return BackupResult{Outcome: BackupDestinationFailed, Message: "backup destination failed"}
+		return backupFailure(BackupDestinationFailed, stages, BackupStageDestination, BackupFailureDestination, BackupRemediationDestination)
 	}
+	stages[BackupStageDestination].Status = BackupStagePassed
 	keep := false
 	defer func() {
 		if !keep {
@@ -167,56 +298,65 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		}
 	}()
 	if ctx.Err() != nil {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageCredentials, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	credential, err := a.Transport.Prepare(plan.config)
 	if err != nil {
-		return BackupResult{Outcome: BackupPreconditionFailed, Message: "backup precondition failed"}
+		return backupFailure(BackupPreconditionFailed, stages, BackupStageCredentials, BackupFailureCredentials, BackupRemediationCredentials)
 	}
+	stages[BackupStageCredentials].Status = BackupStagePassed
 	run, err := BuildHelperDump(HelperDumpRequest{GOOS: plan.goos, Container: plan.container, Config: plan.config, Credential: credential, Timeout: plan.timeout})
 	if err != nil {
 		_ = credential.Cleanup()
-		return BackupResult{Outcome: BackupPreconditionFailed, Message: "backup precondition failed"}
+		return backupFailure(BackupPreconditionFailed, stages, BackupStageDump, BackupFailureHelperPrecondition, BackupRemediationHelperImage)
 	}
 	if ctx.Err() != nil {
 		_ = credential.Cleanup()
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageDump, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	result := RunHelper(ctx, a.Executor, run, credential, staged)
 	if result.Outcome == ProcessCancelled {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageDump, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	if result.Outcome == ProcessTimedOut {
-		return BackupResult{Outcome: BackupTimedOut, Message: "backup timed out"}
+		return backupFailure(BackupTimedOut, stages, BackupStageDump, BackupFailureDumpTimeout, BackupRemediationDatabase)
 	}
 	if result.Outcome != ProcessSucceeded {
-		return BackupResult{Outcome: BackupDumpFailed, Message: "backup dump failed"}
+		code := BackupFailureDump
+		if result.Outcome == ProcessCleanupFailed {
+			code = BackupFailureHelperCleanup
+		}
+		return backupFailure(BackupDumpFailed, stages, BackupStageDump, code, BackupRemediationDocker)
 	}
+	stages[BackupStageDump].Status = BackupStagePassed
 	if ctx.Err() != nil {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageStagedFile, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	if err := staged.Sync(); err != nil {
-		return BackupResult{Outcome: BackupDestinationFailed, Message: "backup destination failed"}
+		return backupFailure(BackupDestinationFailed, stages, BackupStageStagedFile, BackupFailureStagedSync, BackupRemediationStorage)
 	}
 	if err := staged.Close(); err != nil {
-		return BackupResult{Outcome: BackupDestinationFailed, Message: "backup destination failed"}
+		return backupFailure(BackupDestinationFailed, stages, BackupStageStagedFile, BackupFailureStagedClose, BackupRemediationStorage)
 	}
 	if info, err := os.Stat(staged.Path()); err != nil || info.Size() == 0 {
-		return BackupResult{Outcome: BackupDumpFailed, Message: "backup dump failed"}
+		return backupFailure(BackupDumpFailed, stages, BackupStageStagedFile, BackupFailureStagedEmpty, BackupRemediationStorage)
 	}
+	stages[BackupStageStagedFile].Status = BackupStagePassed
 	if ctx.Err() != nil {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStageArchiveValidation, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	if err := a.Validator.Validate(ctx, staged.Path()); err != nil {
-		return BackupResult{Outcome: BackupValidationFailed, Message: "backup validation failed"}
+		return backupFailure(BackupValidationFailed, stages, BackupStageArchiveValidation, BackupFailureArchiveValidation, BackupRemediationArchive)
 	}
+	stages[BackupStageArchiveValidation].Status = BackupStagePassed
 	if ctx.Err() != nil {
-		return BackupResult{Outcome: BackupCancelled, Message: "backup cancelled"}
+		return backupFailure(BackupCancelled, stages, BackupStagePublication, BackupFailureCancelled, BackupRemediationRetry)
 	}
 	publication, err := PublishBackupPair(ctx, ownedPublicationRequest(PublicationRequest{Directory: plan.destination.Directory(), DumpPath: staged.Path(), Container: plan.container, Config: plan.config}, staged.Path()))
 	if err != nil {
-		return BackupResult{Outcome: BackupDestinationFailed, Message: "backup destination failed"}
+		return backupFailure(BackupDestinationFailed, stages, BackupStagePublication, BackupFailurePublication, BackupRemediationStorage)
 	}
+	stages[BackupStagePublication].Status = BackupStagePassed
 	keep = true
-	return BackupResult{Outcome: BackupValidated, DumpPath: publication.DumpPath, ManifestPath: publication.ManifestPath, SHA256: publication.SHA256, Size: publication.Size, Message: "backup validated"}
+	return BackupResult{Outcome: BackupValidated, DumpPath: publication.DumpPath, ManifestPath: publication.ManifestPath, SHA256: publication.SHA256, Size: publication.Size, Stages: stages}
 }
