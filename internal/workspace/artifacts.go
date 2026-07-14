@@ -15,23 +15,36 @@ type ResolvedArtifacts struct {
 	GPUFile  string
 }
 
+// ArtifactPaths identifies the required files for a persisted workspace.
+type ArtifactPaths struct {
+	EnvFile  string
+	BaseFile string
+}
+
+// RequiredArtifactPaths returns the required workspace artifact paths without reading them.
+func RequiredArtifactPaths(workspaceDir string) ArtifactPaths {
+	return ArtifactPaths{
+		EnvFile:  filepath.Join(workspaceDir, ".env"),
+		BaseFile: filepath.Join(workspaceDir, "docker-compose.yml"),
+	}
+}
+
 func ResolveArtifacts(workspaceDir string) (ResolvedArtifacts, error) {
 	if workspaceDir == "" {
 		return ResolvedArtifacts{}, fmt.Errorf("existing installation artifacts not found; run install first or pass --workspace-dir (workspace is empty)")
 	}
 
-	envPath := filepath.Join(workspaceDir, ".env")
-	basePath := filepath.Join(workspaceDir, "docker-compose.yml")
-	if err := requireFile(envPath); err != nil {
+	paths := RequiredArtifactPaths(workspaceDir)
+	if err := requireFile(paths.EnvFile); err != nil {
 		return ResolvedArtifacts{}, err
 	}
-	if err := requireFile(basePath); err != nil {
+	if err := requireFile(paths.BaseFile); err != nil {
 		return ResolvedArtifacts{}, err
 	}
 
 	return ResolvedArtifacts{
-		EnvFile:  envPath,
-		BaseFile: basePath,
+		EnvFile:  paths.EnvFile,
+		BaseFile: paths.BaseFile,
 		GPUFile:  filepath.Join(workspaceDir, "docker-compose.gpu.yml"),
 	}, nil
 }
