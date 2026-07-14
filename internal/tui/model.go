@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -340,7 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.state = StateBackupResult
-			m.backupResult = migration.BackupResult{Outcome: migration.BackupPreconditionFailed, Message: "backup preflight failed"}
+			m.backupResult = migration.BackupPreflightFailureResult()
 			return m, nil
 		}
 		m.backupPlan = msg.Plan
@@ -771,11 +772,11 @@ func (m Model) View() string {
 	case StateBackupRunning:
 		return m.deps.Theme.TextMuted.Render("Creating backup: dump, validate, and publish. Press Escape to cancel safely.")
 	case StateMigrationConfirm:
-		return m.deps.Theme.Primary.Bold(true).Render("Backup validated") + fmt.Sprintf("\n\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nThe validated backup is complete. Continuing will stop the confirmed legacy PM2 services and begin installing the new services.\n\nPress Enter to continue or Escape to stop here and preserve the backup.\n", m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
+		return m.deps.Theme.Primary.Bold(true).Render("Backup validated") + fmt.Sprintf("\n\n%s\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nThe validated backup is complete. Continuing will stop the confirmed legacy PM2 services and begin installing the new services.\n\nPress Enter to continue or Escape to stop here and preserve the backup.\n", m.backupStagesView(), m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
 	case StateMigrationCancelled:
 		return m.deps.Theme.Primary.Bold(true).Render("Migration stopped safely") + fmt.Sprintf("\n\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nPM2 services were not stopped and new services were not installed. The validated backup was preserved.\n", m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
 	case StateBackupResult:
-		return m.deps.Theme.TextMuted.Render("Backup did not validate. Later migration steps remain blocked.\n")
+		return m.backupResultView()
 	case StateDatabaseRestore:
 		return m.migrationRestoreView()
 	case StateMigrationQuiescence:
@@ -814,6 +815,24 @@ func (m Model) View() string {
 	default:
 		return m.deps.Theme.TextMuted.Render("Loading…")
 	}
+}
+
+func (m Model) backupResultView() string {
+	var b strings.Builder
+	b.WriteString(m.deps.Theme.Primary.Bold(true).Render("Backup did not validate"))
+	b.WriteString("\n\nLater migration steps remain blocked.\n\n")
+	b.WriteString(m.backupStagesView())
+	b.WriteString(fmt.Sprintf("\nFailure code: %s\nRemediation: %s\n", m.backupResult.FailureCode.String(), m.backupResult.Remediation.String()))
+	return b.String()
+}
+
+func (m Model) backupStagesView() string {
+	var b strings.Builder
+	b.WriteString("Stages:\n")
+	for _, stage := range m.backupResult.Stages {
+		b.WriteString(fmt.Sprintf("  %-43s %s\n", stage.Stage.String()+":", stage.Status.String()))
+	}
+	return b.String()
 }
 
 func hasMigrationCapability(deps Dependencies) bool {

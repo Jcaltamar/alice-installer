@@ -71,8 +71,8 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 }
 
 func TestMigrationFailuresAndCancellationStayBlocked(t *testing.T) {
-	for _, result := range []migration.BackupResult{{Outcome: migration.BackupCancelled}, {Outcome: migration.BackupDumpFailed}, {Outcome: migration.BackupValidationFailed}} {
-		t.Run(result.Message, func(t *testing.T) {
+	for name, result := range map[string]migration.BackupResult{"cancelled": {Outcome: migration.BackupCancelled}, "dump failed": {Outcome: migration.BackupDumpFailed}, "validation failed": {Outcome: migration.BackupValidationFailed}} {
+		t.Run(name, func(t *testing.T) {
 			deps := buildTestDeps()
 			action := &fakeLegacyBackupAction{result: result}
 			deps.LegacyBackupAction = action
@@ -82,6 +82,58 @@ func TestMigrationFailuresAndCancellationStayBlocked(t *testing.T) {
 			updated, _ := m.Update(BackupCompletedMsg{Result: result})
 			if updated.(Model).state != StateBackupResult {
 				t.Fatalf("failure state = %v", updated.(Model).state)
+			}
+		})
+	}
+}
+
+func TestMigrationBackupResultRendersBoundedStageDiagnostics(t *testing.T) {
+	stages := []migration.BackupStageResult{
+		{Stage: migration.BackupStageDestination, Status: migration.BackupStagePassed},
+		{Stage: migration.BackupStageCredentials, Status: migration.BackupStagePassed},
+		{Stage: migration.BackupStageDump, Status: migration.BackupStagePassed},
+		{Stage: migration.BackupStageStagedFile, Status: migration.BackupStagePassed},
+		{Stage: migration.BackupStageArchiveValidation, Status: migration.BackupStagePassed},
+		{Stage: migration.BackupStagePublication, Status: migration.BackupStagePassed},
+	}
+	for _, tt := range []struct {
+		name      string
+		state     State
+		result    migration.BackupResult
+		want      []string
+		forbidden []string
+	}{
+		{
+			name:   "validated backup shows all stages passed",
+			state:  StateMigrationConfirm,
+			result: migration.BackupResult{Outcome: migration.BackupValidated, Stages: stages, DumpPath: "/safe/backup.dump", ManifestPath: "/safe/backup.json", SHA256: "abc", Size: 42},
+			want:   []string{"Backup validated", "Destination preparation:", "Archive validation:", "Publication, checksum, and manifest:", "passed"},
+		},
+		{
+			name:      "archive failure shows bounded failure details",
+			state:     StateBackupResult,
+			result:    migration.BackupResult{Outcome: migration.BackupValidationFailed, Stages: append([]migration.BackupStageResult(nil), stages...), FailureCode: migration.BackupFailureArchiveValidation, Remediation: migration.BackupRemediationArchive},
+			want:      []string{"Backup did not validate", "Archive validation:", "failed", "Publication, checksum, and manifest:", "not run", "backup-archive-validation", "do not continue migration"},
+			forbidden: []string{"synthetic-secret", "raw stderr", "password="},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.state == StateBackupResult {
+				tt.result.Stages[migration.BackupStageArchiveValidation].Status = migration.BackupStageFailed
+				tt.result.Stages[migration.BackupStagePublication].Status = migration.BackupStageNotRun
+			}
+			m := NewModel(buildTestDeps())
+			m.state, m.backupResult = tt.state, tt.result
+			view := m.View()
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("view missing %q: %q", want, view)
+				}
+			}
+			for _, forbidden := range tt.forbidden {
+				if strings.Contains(view, forbidden) {
+					t.Fatalf("view exposed %q: %q", forbidden, view)
+				}
 			}
 		})
 	}
@@ -220,7 +272,6 @@ func TestMigrationCancelledCompletionIsTerminalAndRedacted(t *testing.T) {
 	updated, cmd := m.Update(BackupCompletedMsg{Result: migration.BackupResult{
 		Outcome:  migration.BackupCancelled,
 		DumpPath: "/unsafe/partial.dump",
-		Message:  "synthetic-secret-cancelled",
 	}})
 	m = updated.(Model)
 	if m.state != StateBackupResult || cmd != nil || strings.Contains(m.View(), "synthetic-secret-cancelled") || strings.Contains(m.View(), "/unsafe/partial.dump") {

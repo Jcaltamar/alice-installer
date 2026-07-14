@@ -3,6 +3,7 @@ package migration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -175,6 +176,45 @@ func TestRunHelperReturnsRedactedTypedOutcomeWhenReconciliationFails(t *testing.
 		t.Fatalf("credential file remains after failed reconciliation: %v", err)
 	}
 	assertNoProcessLeak(t, got, executor.specs)
+}
+
+func TestCleanupHelperDoesNotTreatInterruptedCleanupAsAbsence(t *testing.T) {
+	run := HelperRun{Name: "alice-pg11-safe"}
+	executor := &terminalFakeExecutor{cleanup: ProcessResult{Outcome: ProcessCancelled, StderrCode: "docker-container-absent"}}
+
+	if err := CleanupHelper(context.Background(), executor, run); !errors.Is(err, ErrProcessPrecondition) {
+		t.Fatalf("CleanupHelper() error = %v, want fail-closed precondition error", err)
+	}
+}
+
+func TestRunHelperAcceptsDockerAutoRemovalAfterSuccessfulRun(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	docker := "#!/bin/sh\n" +
+		"if [ \"$1\" = run ]; then printf 'archive'; exit 0; fi\n" +
+		"if [ \"$1\" = rm ]; then echo 'Error response from daemon: No such container: alice-pg11-safe' >&2; exit 1; fi\n" +
+		"exit 2\n"
+	if err := os.WriteFile(dockerPath, []byte(docker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	credential, err := (CredentialTransport{TempRoot: t.TempDir()}).Prepare(testProcessConfig(processSecretSentinel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := HelperRun{
+		Name: "alice-pg11-safe",
+		Spec: ProcessSpec{Name: "docker", Args: []string{"run", "--rm", "--name", "alice-pg11-safe", "safe-image"}},
+	}
+
+	result := RunHelper(context.Background(), OSBinaryExecutor{}, run, credential, io.Discard)
+
+	if result.Outcome != ProcessSucceeded {
+		t.Fatalf("auto-removed helper outcome = %#v, want success", result)
+	}
+	if _, err := os.Stat(credential.HostPath()); !os.IsNotExist(err) {
+		t.Fatalf("credential file remains after helper completion: %v", err)
+	}
 }
 
 func TestOSBinaryExecutorTimesOutAndBoundsStderr(t *testing.T) {
