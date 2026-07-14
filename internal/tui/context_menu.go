@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,7 +24,10 @@ const (
 type ContextActionSelectedMsg struct{ Action ContextAction }
 type DetectionStartedMsg struct{}
 type DetectionCompletedMsg struct{ Detection installation.Detection }
+type UpdateCompletedMsg struct{ Err error }
 type BlockedOperationDismissedMsg struct{}
+
+type UpdateAction interface{ Run(context.Context) error }
 
 type ContextMenuModel struct {
 	theme     theme.Theme
@@ -119,6 +124,18 @@ func (m blockedOperationModel) Update(msg tea.Msg) (blockedOperationModel, tea.C
 
 func (m blockedOperationModel) View() string {
 	return m.theme.Primary.Bold(true).Render(contextActionLabel(m.action)+" is not available") + "\n\nThis operation has no approved safety contract and will not run. No files, processes, or services were changed.\n\nPress Escape to return to the menu, or q to exit.\n"
+}
+
+type actionResultModel struct {
+	theme theme.Theme
+	err   error
+}
+
+func (m actionResultModel) View() string {
+	if m.err != nil {
+		return m.theme.TextMuted.Render(fmt.Sprintf("Update failed: %v", m.err)) + "\n\nUse the explicit update command after resolving the error.\n"
+	}
+	return m.theme.Primary.Bold(true).Render("Update completed") + "\n\nThe existing deployment was refreshed.\n"
 }
 
 func contextActionLabel(action ContextAction) string {

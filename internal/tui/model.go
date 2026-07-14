@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,7 +36,9 @@ const (
 	StateResult           State = iota
 	StateDetecting        State = iota
 	StateContextMenu      State = iota
+	StateUpdating         State = iota
 	StateBlockedOperation State = iota
+	StateActionResult     State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -64,6 +67,7 @@ type Dependencies struct {
 
 	PreflightCoordinator preflight.Coordinator
 	Detector             installation.Detector
+	UpdateAction         UpdateAction
 
 	// Executor is used by the bootstrap state to run elevated commands.
 	// In production: NewExecutor(). In tests: *FakeExecutor.
@@ -103,6 +107,7 @@ type Model struct {
 	result                ResultModel
 	contextMenu           ContextMenuModel
 	blockedOperation      blockedOperationModel
+	actionResult          actionResultModel
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -232,8 +237,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = StatePreflight
 			return m, m.preflight.Init()
 		}
+		if msg.Action == ContextActionUpdate {
+			m.state = StateUpdating
+			if m.deps.UpdateAction == nil {
+				return m, func() tea.Msg { return UpdateCompletedMsg{Err: fmt.Errorf("update action is unavailable")} }
+			}
+			return m, func() tea.Msg { return UpdateCompletedMsg{Err: m.deps.UpdateAction.Run(context.Background())} }
+		}
 		m.state = StateBlockedOperation
 		m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
+		return m, nil
+
+	case UpdateCompletedMsg:
+		if m.state != StateUpdating {
+			return m, nil
+		}
+		m.state = StateActionResult
+		m.actionResult = actionResultModel{theme: m.deps.Theme, err: msg.Err}
 		return m, nil
 
 	case BlockedOperationDismissedMsg:
@@ -514,8 +534,12 @@ func (m Model) View() string {
 		return m.deps.Theme.TextMuted.Render("Detecting existing installation…")
 	case StateContextMenu:
 		return m.contextMenu.View()
+	case StateUpdating:
+		return m.deps.Theme.TextMuted.Render("Updating existing installation…")
 	case StateBlockedOperation:
 		return m.blockedOperation.View()
+	case StateActionResult:
+		return m.actionResult.View()
 	case StatePreflight:
 		return m.preflight.View()
 	case StateBootstrap:

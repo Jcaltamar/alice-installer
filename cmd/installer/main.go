@@ -314,6 +314,10 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 				},
 			},
 		}
+		deps.UpdateAction = update.Action{
+			Config:       update.Config{WorkspaceDir: f.WorkspaceDir},
+			Dependencies: update.Dependencies{Compose: composeRunner, GPU: gpuDetector},
+		}
 	}
 	return deps
 }

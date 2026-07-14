@@ -21,6 +21,16 @@ func (d *fakeDetector) Detect(context.Context) installation.Detection {
 	return d.detection
 }
 
+type fakeUpdateAction struct {
+	err   error
+	calls int
+}
+
+func (a *fakeUpdateAction) Run(context.Context) error {
+	a.calls++
+	return a.err
+}
+
 func TestContextMenuActionMatrix(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -170,6 +180,45 @@ func TestRootDetectsBeforePreflightAndRoutesInstall(t *testing.T) {
 	updated, _ = m.Update(ContextActionSelectedMsg{Action: ContextActionInstall})
 	if updated.(Model).state != StatePreflight {
 		t.Fatalf("Install state = %v, want StatePreflight", updated.(Model).state)
+	}
+}
+
+func TestRootUpdateRunsOnceAndReportsFailure(t *testing.T) {
+	deps := buildTestDeps()
+	action := &fakeUpdateAction{err: fmt.Errorf("pull failed")}
+	deps.UpdateAction = action
+	m := NewModel(deps)
+	m.state = StateContextMenu
+	m.contextMenu = NewContextMenuModel(deps.Theme, installation.Detection{State: installation.StateCurrent})
+	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionUpdate})
+	m = updated.(Model)
+	if m.state != StateUpdating || cmd == nil {
+		t.Fatalf("update state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if action.calls != 1 || m.state != StateActionResult || !strings.Contains(m.View(), "pull failed") {
+		t.Fatalf("calls/state/view = %d/%v/%q", action.calls, m.state, m.View())
+	}
+	updated, duplicate := m.Update(ContextActionSelectedMsg{Action: ContextActionUpdate})
+	if updated.(Model).state != StateActionResult || duplicate != nil || action.calls != 1 {
+		t.Fatal("late selection must not re-run update")
+	}
+}
+
+func TestRootUnavailableUpdateReportsResult(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateContextMenu
+	m.contextMenu = NewContextMenuModel(m.deps.Theme, installation.Detection{State: installation.StateCurrent})
+	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionUpdate})
+	m = updated.(Model)
+	if m.state != StateUpdating || cmd == nil {
+		t.Fatalf("state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateActionResult || !strings.Contains(m.View(), "update action is unavailable") {
+		t.Fatalf("state/view = %v/%q", m.state, m.View())
 	}
 }
 
