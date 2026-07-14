@@ -200,8 +200,7 @@ func TestFullFlowDockerMissingBootstrapsInstall(t *testing.T) {
 	m := NewModel(buildDockerBootstrapDeps(dockerClient, env, fe))
 
 	// Splash → preflight start.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 
 	// First preflight: Docker Probe fails → CheckDockerDaemon FAIL.
 	preflightResult := drainCmd(cmd)
@@ -280,8 +279,7 @@ func TestFullFlowUserNotInGroupBootstrapsGroupAdd(t *testing.T) {
 	m := NewModel(buildDockerBootstrapDeps(dockerClient, env, fe))
 
 	// Splash → preflight.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 
 	// First preflight: Docker Probe fails → CheckDockerDaemon FAIL.
 	preflightResult := drainCmd(cmd)
@@ -363,8 +361,7 @@ func TestFullFlowSystemctlBootstrapsDaemonStart(t *testing.T) {
 	m := NewModel(buildDockerBootstrapDeps(dockerClient, env, fe))
 
 	// Splash → preflight.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)
@@ -416,8 +413,7 @@ func TestFullFlowNonSystemdStuckNonFixable(t *testing.T) {
 	m := NewModel(buildDockerBootstrapDeps(dockerClient, env, fe))
 
 	// Splash → preflight.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)
@@ -500,8 +496,7 @@ func TestFullFlowMixedDockerAndDirsActionsOrderedCorrectly(t *testing.T) {
 	m := NewModel(deps)
 
 	// Splash → preflight.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 
 	preflightResult := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResult)

@@ -33,6 +33,9 @@ const (
 	StateDeploy           State = iota
 	StateVerify           State = iota
 	StateResult           State = iota
+	StateDetecting        State = iota
+	StateContextMenu      State = iota
+	StateBlockedOperation State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -98,6 +101,8 @@ type Model struct {
 	deploy                DeployModel
 	verify                VerifyModel
 	result                ResultModel
+	contextMenu           ContextMenuModel
+	blockedOperation      blockedOperationModel
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -183,6 +188,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyCtrlC:
 			return m, tea.Quit
 
+		case msg.Type == tea.KeyEsc && (m.state == StateDetecting || m.state == StateContextMenu):
+			return m, tea.Quit
+
 		case msg.Type == tea.KeyRunes && string(msg.Runes) == "q":
 			// "q" quits from any state EXCEPT the workspace text input.
 			if m.state != StateWorkspaceInput {
@@ -196,9 +204,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// the root can intercept and switch state).
 	// -----------------------------------------------------------------------
 	switch msg := msg.(type) {
+	case DetectionStartedMsg:
+		if m.state != StateSplash {
+			return m, nil
+		}
+		m.state = StateDetecting
+		if m.deps.Detector == nil {
+			return m, func() tea.Msg {
+				return DetectionCompletedMsg{Detection: installation.Detection{State: installation.StateUnknown}}
+			}
+		}
+		return m, func() tea.Msg { return DetectionCompletedMsg{Detection: m.deps.Detector.Detect(context.Background())} }
+
+	case DetectionCompletedMsg:
+		if m.state != StateDetecting {
+			return m, nil
+		}
+		m.state = StateContextMenu
+		m.contextMenu = NewContextMenuModel(m.deps.Theme, msg.Detection)
+		return m, nil
+
+	case ContextActionSelectedMsg:
+		if m.state != StateContextMenu || !m.contextMenu.hasAction(msg.Action) {
+			return m, nil
+		}
+		if msg.Action == ContextActionInstall {
+			m.state = StatePreflight
+			return m, m.preflight.Init()
+		}
+		m.state = StateBlockedOperation
+		m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
+		return m, nil
+
+	case BlockedOperationDismissedMsg:
+		if m.state != StateBlockedOperation {
+			return m, nil
+		}
+		m.state = StateContextMenu
+		return m, nil
+
 	case PreflightStartedMsg:
-		m.state = StatePreflight
-		return m, m.preflight.Init()
+		return m, nil
 
 	case PreflightResultMsg:
 		// Classify blockers: if all are fixable → bootstrap; any non-fixable → stay preflight.
@@ -376,6 +422,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd = m.splash.Update(msg)
 		m.splash = updated
 
+	case StateContextMenu:
+		var updated ContextMenuModel
+		updated, cmd = m.contextMenu.Update(msg)
+		m.contextMenu = updated
+
+	case StateBlockedOperation:
+		var updated blockedOperationModel
+		updated, cmd = m.blockedOperation.Update(msg)
+		m.blockedOperation = updated
+
 	case StatePreflight:
 		var updated PreflightModel
 		updated, cmd = m.preflight.Update(msg)
@@ -454,6 +510,12 @@ func (m Model) View() string {
 	switch m.state {
 	case StateSplash:
 		return m.splash.View()
+	case StateDetecting:
+		return m.deps.Theme.TextMuted.Render("Detecting existing installation…")
+	case StateContextMenu:
+		return m.contextMenu.View()
+	case StateBlockedOperation:
+		return m.blockedOperation.View()
 	case StatePreflight:
 		return m.preflight.View()
 	case StateBootstrap:

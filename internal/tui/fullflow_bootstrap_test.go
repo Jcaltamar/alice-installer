@@ -129,17 +129,10 @@ func TestFullFlowBootstrapHappyPath(t *testing.T) {
 
 	m := NewModel(buildBootstrapFlowDeps(fw, runner, dirChecker, fe))
 
-	// --- Step 1: Splash → press Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Steps 1-2: Splash → detection → menu → Install → preflight ---
+	m, cmd := enterInstallFromSplash(t, m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: Preflight runs → ConfigDir FAIL → StateBootstrap ---
@@ -322,8 +315,7 @@ func TestFullFlowBootstrapSkippedPreservesReport(t *testing.T) {
 	m := NewModel(buildBootstrapFlowDeps(fw, runner, dirChecker, fe))
 
 	// Splash → Enter → PreflightStartedMsg → StatePreflight → run preflight → StateBootstrap.
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m, cmd = sendMsg(m, drainCmd(cmd).(PreflightStartedMsg))
+	m, cmd := enterInstallFromSplash(t, m)
 	preflightResultMsg := drainCmd(cmd)
 	m, _ = sendMsg(m, preflightResultMsg)
 	if m.state != StateBootstrap {

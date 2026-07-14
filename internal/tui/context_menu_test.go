@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,6 +10,16 @@ import (
 
 	"github.com/jcaltamar/alice-installer/internal/installation"
 )
+
+type fakeDetector struct {
+	detection installation.Detection
+	calls     int
+}
+
+func (d *fakeDetector) Detect(context.Context) installation.Detection {
+	d.calls++
+	return d.detection
+}
 
 func TestContextMenuActionMatrix(t *testing.T) {
 	tests := []struct {
@@ -138,5 +149,105 @@ func TestContextMenuWithoutActionsNeverEmitsSelection(t *testing.T) {
 	_, cmd := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("a blocked contextual menu must not emit a lifecycle action")
+	}
+}
+
+func TestRootDetectsBeforePreflightAndRoutesInstall(t *testing.T) {
+	deps := buildTestDeps()
+	detector := &fakeDetector{detection: installation.Detection{State: installation.StateNotInstalled}}
+	deps.Detector = detector
+	m := NewModel(deps)
+	updated, cmd := m.Update(DetectionStartedMsg{})
+	m = updated.(Model)
+	if m.state != StateDetecting || cmd == nil {
+		t.Fatalf("detection start state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateContextMenu || detector.calls != 1 {
+		t.Fatalf("detection completion state/calls = %v/%d", m.state, detector.calls)
+	}
+	updated, _ = m.Update(ContextActionSelectedMsg{Action: ContextActionInstall})
+	if updated.(Model).state != StatePreflight {
+		t.Fatalf("Install state = %v, want StatePreflight", updated.(Model).state)
+	}
+}
+
+func TestRootRejectsActionsNotOfferedByDetection(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateContextMenu
+	m.contextMenu = NewContextMenuModel(m.deps.Theme, installation.Detection{State: installation.StateUnknown})
+	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionInstall})
+	if updated.(Model).state != StateContextMenu || cmd != nil {
+		t.Fatal("an action absent from the menu must not change state or emit a command")
+	}
+}
+
+func TestRootUsesUnknownWhenDetectorIsUnavailable(t *testing.T) {
+	deps := buildTestDeps()
+	deps.Detector = nil
+	m := NewModel(deps)
+	updated, cmd := m.Update(DetectionStartedMsg{})
+	m = updated.(Model)
+	if m.state != StateDetecting || cmd == nil {
+		t.Fatalf("state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateContextMenu || m.contextMenu.detection.State != installation.StateUnknown || len(m.contextMenu.actions) != 0 {
+		t.Fatalf("unavailable detector produced unsafe menu: state=%v detection=%v actions=%v", m.state, m.contextMenu.detection.State, m.contextMenu.actions)
+	}
+}
+
+func TestBlockedOperationReturnsToMenuWithoutExecuting(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateContextMenu
+	m.contextMenu = NewContextMenuModel(m.deps.Theme, installation.Detection{State: installation.StateLegacyPM2})
+	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
+	m = updated.(Model)
+	if m.state != StateBlockedOperation || cmd != nil {
+		t.Fatalf("blocked state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(BlockedOperationDismissedMsg{})
+	if updated.(Model).state != StateContextMenu {
+		t.Fatalf("dismissed state = %v", updated.(Model).state)
+	}
+}
+
+func TestRootRejectsLateTransitionMessages(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"late detection start", DetectionStartedMsg{}},
+		{"late detection completion", DetectionCompletedMsg{Detection: installation.Detection{State: installation.StateNotInstalled}}},
+		{"late blocked dismissal", BlockedOperationDismissedMsg{}},
+		{"forged preflight start", PreflightStartedMsg{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(buildTestDeps())
+			m.state = StateWorkspaceInput
+			updated, cmd := m.Update(tt.msg)
+			if updated.(Model).state != StateWorkspaceInput || cmd != nil {
+				t.Fatalf("late message changed state/cmd to %v/%v", updated.(Model).state, cmd)
+			}
+		})
+	}
+}
+
+func TestContextualStatesUseGlobalGuards(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateContextMenu
+	m.contextMenu = NewContextMenuModel(m.deps.Theme, installation.Detection{State: installation.StateCurrent})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 79, Height: 24})
+	if !strings.Contains(updated.(Model).View(), "Terminal too small") {
+		t.Fatal("context menu must use the global small-terminal guard")
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("Escape must exit safely from contextual menu")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("Escape command = %T, want tea.QuitMsg", cmd())
 	}
 }

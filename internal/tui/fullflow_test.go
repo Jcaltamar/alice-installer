@@ -13,6 +13,7 @@ package tui
 //   4. Final state is StateResult with success=true.
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -83,6 +85,21 @@ func sendMsg(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
+type notInstalledDetector struct{}
+
+func (notInstalledDetector) Detect(context.Context) installation.Detection {
+	return installation.Detection{State: installation.StateNotInstalled}
+}
+
+func enterInstallFromSplash(t *testing.T, m Model) (Model, tea.Cmd) {
+	t.Helper()
+	m.deps.Detector = notInstalledDetector{}
+	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = sendMsg(m, drainCmd(cmd).(DetectionStartedMsg))
+	m, _ = sendMsg(m, drainCmd(cmd).(DetectionCompletedMsg))
+	return sendMsg(m, ContextActionSelectedMsg{Action: ContextActionInstall})
+}
+
 // TestFullFlowHappyPath drives the entire installer flow deterministically.
 func TestFullFlowHappyPath(t *testing.T) {
 	fw := &envgen.FakeWriter{Written: make(map[string][]byte)}
@@ -104,20 +121,10 @@ func TestFullFlowHappyPath(t *testing.T) {
 
 	m := NewModel(buildFullFlowDeps(fw, runner))
 
-	// --- Step 1: Splash → press Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.state != StateSplash {
-		// Enter on splash emits PreflightStartedMsg; apply that msg next.
-	}
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Steps 1-2: Splash → detection → menu → Install → preflight ---
+	m, cmd := enterInstallFromSplash(t, m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: Preflight runs → PreflightResultMsg (no blocking failures) ---
@@ -408,13 +415,7 @@ func TestFullFlowUnsupportedAsteriskHostSkipsOptionAndKeepsBaseInstallUsable(t *
 func driveFullFlowToOptionalPackages(t *testing.T, m Model, workspace string) (Model, tea.Cmd) {
 	t.Helper()
 
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	started, ok := msg.(PreflightStartedMsg)
-	if !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-	m, cmd = sendMsg(m, started)
+	m, cmd := enterInstallFromSplash(t, m)
 	preflightResultMsg := drainCmd(cmd)
 	m, cmd = sendMsg(m, preflightResultMsg)
 	_ = cmd

@@ -29,7 +29,7 @@ const (
 //  3. Installer subtitle in TextMuted colour
 //
 // Controls:
-//   - Enter → emits PreflightStartedMsg to advance to the preflight state.
+//   - Enter → emits DetectionStartedMsg to inspect the existing installation.
 //   - Any other key → no-op.
 type SplashModel struct {
 	theme theme.Theme
@@ -48,13 +48,13 @@ func (s SplashModel) Init() tea.Cmd {
 }
 
 // Update implements tea.Model.
-// Enter key returns a command that emits PreflightStartedMsg.
+// Enter key returns a command that emits DetectionStartedMsg.
 func (s SplashModel) Update(msg tea.Msg) (SplashModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.KeyMsg:
 		switch m.Type {
 		case tea.KeyEnter:
-			return s, func() tea.Msg { return PreflightStartedMsg{} }
+			return s, func() tea.Msg { return DetectionStartedMsg{} }
 		}
 	}
 	return s, nil

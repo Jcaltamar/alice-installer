@@ -20,6 +20,8 @@ const (
 )
 
 type ContextActionSelectedMsg struct{ Action ContextAction }
+type DetectionStartedMsg struct{}
+type DetectionCompletedMsg struct{ Detection installation.Detection }
 type BlockedOperationDismissedMsg struct{}
 
 type ContextMenuModel struct {

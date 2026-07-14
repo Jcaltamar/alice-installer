@@ -115,13 +115,12 @@ func TestQKeyInWorkspaceInputDoesNotQuit(t *testing.T) {
 	}
 }
 
-// TestPreflightStartedMsgTransitionsToPreflight verifies the state transition.
-func TestPreflightStartedMsgTransitionsToPreflight(t *testing.T) {
+func TestPreflightStartedMsgCannotBypassContextualGate(t *testing.T) {
 	m := NewModel(buildTestDeps())
-	updated, _ := m.Update(PreflightStartedMsg{})
+	updated, cmd := m.Update(PreflightStartedMsg{})
 	m = updated.(Model)
-	if m.state != StatePreflight {
-		t.Errorf("PreflightStartedMsg → state = %v, want StatePreflight", m.state)
+	if m.state != StateSplash || cmd != nil {
+		t.Fatalf("forged PreflightStartedMsg state/cmd = %v/%v, want StateSplash/nil", m.state, cmd)
 	}
 }
 

@@ -123,17 +123,10 @@ func TestBootstrapLoopGuardPreventsInfiniteRetry(t *testing.T) {
 
 	m := NewModel(buildAdversarialLoopDeps(fe))
 
-	// --- Step 1: Splash → Enter → PreflightStartedMsg ---
-	m, cmd := sendMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	msg := drainCmd(cmd)
-	if _, ok := msg.(PreflightStartedMsg); !ok {
-		t.Fatalf("splash Enter should produce PreflightStartedMsg, got %T", msg)
-	}
-
-	// --- Step 2: Apply PreflightStartedMsg → StatePreflight ---
-	m, cmd = sendMsg(m, msg.(PreflightStartedMsg))
+	// --- Steps 1-2: Splash → detection → menu → Install → preflight ---
+	m, cmd := enterInstallFromSplash(t, m)
 	if m.state != StatePreflight {
-		t.Fatalf("after PreflightStartedMsg state = %v, want StatePreflight", m.state)
+		t.Fatalf("after contextual Install state = %v, want StatePreflight", m.state)
 	}
 
 	// --- Step 3: First preflight runs → docker_daemon FAIL → StateBootstrap ---
