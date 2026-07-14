@@ -12,7 +12,12 @@ import (
 
 const LegacyApplicationRoot = "/opt/backend_alice_guardian/node"
 
-var ErrBackupPrecondition = errors.New("backup precondition failed")
+var (
+	ErrBackupPrecondition      = errors.New("backup precondition failed")
+	ErrBackupEngineUnavailable = errors.New("backup engine unavailable")
+	ErrResolvedConfigInvalid   = errors.New("resolved database configuration invalid")
+	ErrLegacyContainerInvalid  = errors.New("legacy container identity invalid")
+)
 
 type BackupOutcome uint8
 
@@ -30,7 +35,8 @@ const (
 type BackupStage uint8
 
 const (
-	BackupStageDestination BackupStage = iota
+	BackupStagePreconditions BackupStage = iota
+	BackupStageDestination
 	BackupStageCredentials
 	BackupStageDump
 	BackupStageStagedFile
@@ -40,6 +46,7 @@ const (
 
 func (s BackupStage) String() string {
 	labels := [...]string{
+		"Backup preconditions",
 		"Destination preparation",
 		"Credential preparation",
 		"Dump execution",
@@ -81,6 +88,9 @@ type BackupFailureCode uint8
 const (
 	BackupFailureNone BackupFailureCode = iota
 	BackupFailurePrecondition
+	BackupFailureEngineUnavailable
+	BackupFailureResolvedConfigInvalid
+	BackupFailureLegacyContainerInvalid
 	BackupFailureCancelled
 	BackupFailureDestination
 	BackupFailureCredentials
@@ -96,7 +106,7 @@ const (
 )
 
 func (c BackupFailureCode) String() string {
-	codes := [...]string{"", "backup-precondition", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
+	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
 	if int(c) >= len(codes) || c == BackupFailureNone {
 		return "backup-failed"
 	}
@@ -216,8 +226,19 @@ func backupFailure(outcome BackupOutcome, stages []BackupStageResult, failed Bac
 	return BackupResult{Outcome: outcome, Stages: stages, FailureCode: code, Remediation: remediation}
 }
 
-func BackupPreflightFailureResult() BackupResult {
-	return backupFailure(BackupPreconditionFailed, newBackupDiagnostics(), BackupStageDestination, BackupFailurePrecondition, BackupRemediationPrerequisites)
+func BackupPreflightFailureResult(err error) BackupResult {
+	code, stage, remediation := BackupFailurePrecondition, BackupStagePreconditions, BackupRemediationPrerequisites
+	switch {
+	case errors.Is(err, ErrBackupEngineUnavailable):
+		code = BackupFailureEngineUnavailable
+	case errors.Is(err, ErrResolvedConfigInvalid):
+		code = BackupFailureResolvedConfigInvalid
+	case errors.Is(err, ErrLegacyContainerInvalid):
+		code = BackupFailureLegacyContainerInvalid
+	case errors.Is(err, ErrDestinationUnsafe), errors.Is(err, ErrDestinationSpace), errors.Is(err, ErrDestinationLocked), errors.Is(err, ErrDestinationFailure):
+		code, stage, remediation = BackupFailureDestination, BackupStageDestination, BackupRemediationDestination
+	}
+	return backupFailure(BackupPreconditionFailed, newBackupDiagnostics(), stage, code, remediation)
 }
 
 func (r BackupResult) String() string {
@@ -250,19 +271,22 @@ type BackupAction struct {
 
 // Preflight does not create directories, locks, staging files, credentials, or processes.
 func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (BackupPlan, error) {
-	if ctx.Err() != nil || a.Resolver == nil || a.Inspector == nil || a.Store == nil {
+	if ctx.Err() != nil {
 		return BackupPlan{}, ErrBackupPrecondition
+	}
+	if a.Resolver == nil || a.Inspector == nil || a.Store == nil {
+		return BackupPlan{}, ErrBackupEngineUnavailable
 	}
 	config, err := a.Resolver.Resolve(ctx, ConfigRequest{Environment: request.ConfigEnvironment})
 	if err != nil || !validConfig(config) {
-		return BackupPlan{}, ErrBackupPrecondition
+		return BackupPlan{}, ErrResolvedConfigInvalid
 	}
 	if err := ctx.Err(); err != nil {
 		return BackupPlan{}, ErrBackupPrecondition
 	}
 	container, err := a.Inspector.Discover(ctx, config)
 	if err != nil || container.Image != PostgreSQL11Image || !fullContainerID.MatchString(container.ID) {
-		return BackupPlan{}, ErrBackupPrecondition
+		return BackupPlan{}, ErrLegacyContainerInvalid
 	}
 	if err := ctx.Err(); err != nil {
 		return BackupPlan{}, ErrBackupPrecondition
@@ -281,11 +305,18 @@ func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (Bac
 func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 	stages := newBackupDiagnostics()
 	if ctx.Err() != nil {
-		return backupFailure(BackupCancelled, stages, BackupStageDestination, BackupFailureCancelled, BackupRemediationRetry)
+		return backupFailure(BackupCancelled, stages, BackupStagePreconditions, BackupFailureCancelled, BackupRemediationRetry)
 	}
-	if a.Store == nil || a.Executor == nil || a.Validator == nil || !validConfig(plan.config) || plan.container.Image != PostgreSQL11Image || !fullContainerID.MatchString(plan.container.ID) {
-		return backupFailure(BackupPreconditionFailed, stages, BackupStageDestination, BackupFailurePrecondition, BackupRemediationPrerequisites)
+	if a.Store == nil || a.Executor == nil || a.Validator == nil {
+		return backupFailure(BackupPreconditionFailed, stages, BackupStagePreconditions, BackupFailureEngineUnavailable, BackupRemediationPrerequisites)
 	}
+	if !validConfig(plan.config) {
+		return backupFailure(BackupPreconditionFailed, stages, BackupStagePreconditions, BackupFailureResolvedConfigInvalid, BackupRemediationPrerequisites)
+	}
+	if plan.container.Image != PostgreSQL11Image || !fullContainerID.MatchString(plan.container.ID) {
+		return backupFailure(BackupPreconditionFailed, stages, BackupStagePreconditions, BackupFailureLegacyContainerInvalid, BackupRemediationPrerequisites)
+	}
+	stages[BackupStagePreconditions].Status = BackupStagePassed
 	staged, err := a.Store.Prepare(ctx, plan.destination)
 	if err != nil {
 		return backupFailure(BackupDestinationFailed, stages, BackupStageDestination, BackupFailureDestination, BackupRemediationDestination)

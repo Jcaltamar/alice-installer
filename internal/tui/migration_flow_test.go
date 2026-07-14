@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,6 +17,12 @@ type fakeLegacyBackupAction struct {
 	runCalls       int
 	preflightErr   error
 	result         migration.BackupResult
+}
+
+type fakeMigrationAuthenticator struct{ err error }
+
+func (a fakeMigrationAuthenticator) Authenticate() tea.Cmd {
+	return func() tea.Msg { return MigrationAuthenticationCompletedMsg{Err: a.err} }
 }
 
 func (a *fakeLegacyBackupAction) Preflight(context.Context, migration.BackupRequest) (migration.BackupPlan, error) {
@@ -33,6 +40,7 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 	deps.LegacyBackupAction = action
 	deps.LegacyRestoreAction = &fakeLegacyRestoreAction{result: migration.RestoreResult{Outcome: migration.RestoreSucceeded}}
 	deps.MigrationHandoff = &fakeMigrationHandoff{}
+	deps.MigrationAuthenticator = fakeMigrationAuthenticator{}
 	deps.LegacyBackupRequest = migration.BackupRequest{Destination: "/safe"}
 	m := NewModel(deps)
 	m.state = StateContextMenu
@@ -40,8 +48,13 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 
 	updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
 	m = updated.(Model)
-	if m.state != StateBackupPreflight || cmd == nil || action.runCalls != 0 {
+	if m.state != StateMigrationAuth || cmd == nil || action.preflightCalls != 0 || action.runCalls != 0 {
 		t.Fatalf("state/cmd/run = %v/%v/%d", m.state, cmd, action.runCalls)
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateBackupPreflight || cmd == nil || action.preflightCalls != 0 {
+		t.Fatalf("successful authentication must schedule preflight: state/cmd/preflight = %v/%v/%d", m.state, cmd, action.preflightCalls)
 	}
 	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
@@ -89,6 +102,7 @@ func TestMigrationFailuresAndCancellationStayBlocked(t *testing.T) {
 
 func TestMigrationBackupResultRendersBoundedStageDiagnostics(t *testing.T) {
 	stages := []migration.BackupStageResult{
+		{Stage: migration.BackupStagePreconditions, Status: migration.BackupStagePassed},
 		{Stage: migration.BackupStageDestination, Status: migration.BackupStagePassed},
 		{Stage: migration.BackupStageCredentials, Status: migration.BackupStagePassed},
 		{Stage: migration.BackupStageDump, Status: migration.BackupStagePassed},
@@ -134,6 +148,36 @@ func TestMigrationBackupResultRendersBoundedStageDiagnostics(t *testing.T) {
 				if strings.Contains(view, forbidden) {
 					t.Fatalf("view exposed %q: %q", forbidden, view)
 				}
+			}
+		})
+	}
+}
+
+func TestMigrationAuthenticationFailureBlocksBeforePreflight(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{{name: "failure", err: errors.New("sudo failed")}, {name: "cancel", err: context.Canceled}} {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := buildTestDeps()
+			action := &fakeLegacyBackupAction{}
+			deps.LegacyBackupAction = action
+			deps.LegacyRestoreAction = &fakeLegacyRestoreAction{}
+			deps.MigrationHandoff = &fakeMigrationHandoff{}
+			deps.MigrationAuthenticator = fakeMigrationAuthenticator{err: tt.err}
+			m := NewModel(deps)
+			m.state = StateContextMenu
+			m.contextMenu = NewContextMenuModel(deps.Theme, installation.Detection{State: installation.StateLegacyPM2})
+
+			updated, cmd := m.Update(ContextActionSelectedMsg{Action: ContextActionMigration})
+			m = updated.(Model)
+			updated, cmd = m.Update(cmd())
+			m = updated.(Model)
+			if m.state != StateMigrationAuthFailed || cmd != nil || action.preflightCalls != 0 || action.runCalls != 0 {
+				t.Fatalf("auth failure state/cmd/preflight/run = %v/%v/%d/%d", m.state, cmd, action.preflightCalls, action.runCalls)
+			}
+			if view := m.View(); strings.Contains(view, tt.err.Error()) || !strings.Contains(view, "No backup preflight or filesystem mutation") {
+				t.Fatalf("unsafe authentication failure view = %q", view)
 			}
 		})
 	}

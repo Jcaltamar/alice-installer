@@ -42,6 +42,8 @@ const (
 	StateUpdating            State = iota
 	StateBlockedOperation    State = iota
 	StateActionResult        State = iota
+	StateMigrationAuth       State = iota
+	StateMigrationAuthFailed State = iota
 	StateBackupPreflight     State = iota
 	StateBackupConfirm       State = iota
 	StateBackupRunning       State = iota
@@ -66,25 +68,26 @@ type TemplateAssets struct {
 // Dependencies holds all injectable dependencies for the root Model.
 // Every field is an interface so tests can inject fakes without globals.
 type Dependencies struct {
-	Theme               theme.Theme
-	OS                  platform.OSGuard
-	Arch                platform.ArchDetector
-	GPU                 platform.GPUDetector
-	Ports               ports.PortScanner
-	Docker              docker.DockerClient
-	Compose             compose.ComposeRunner
-	Envgen              *envgen.Templater
-	Writer              envgen.FileWriter
-	Assets              TemplateAssets
-	AsteriskInstaller   AsteriskInstaller
-	AsteriskOptions     asterisk.Options
-	AsteriskAvailable   func() bool
-	Detector            installation.Detector
-	UpdateAction        UpdateAction
-	LegacyBackupAction  LegacyBackupAction
-	LegacyBackupRequest migration.BackupRequest
-	LegacyRestoreAction migration.LegacyRestoreAction
-	MigrationHandoff    MigrationHandoff
+	Theme                  theme.Theme
+	OS                     platform.OSGuard
+	Arch                   platform.ArchDetector
+	GPU                    platform.GPUDetector
+	Ports                  ports.PortScanner
+	Docker                 docker.DockerClient
+	Compose                compose.ComposeRunner
+	Envgen                 *envgen.Templater
+	Writer                 envgen.FileWriter
+	Assets                 TemplateAssets
+	AsteriskInstaller      AsteriskInstaller
+	AsteriskOptions        asterisk.Options
+	AsteriskAvailable      func() bool
+	Detector               installation.Detector
+	UpdateAction           UpdateAction
+	LegacyBackupAction     LegacyBackupAction
+	LegacyBackupRequest    migration.BackupRequest
+	LegacyRestoreAction    migration.LegacyRestoreAction
+	MigrationHandoff       MigrationHandoff
+	MigrationAuthenticator MigrationAuthenticator
 
 	PreflightCoordinator preflight.Coordinator
 
@@ -328,11 +331,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
 				return m, nil
 			}
-			m.state = StateBackupPreflight
-			return m, func() tea.Msg {
-				plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), m.deps.LegacyBackupRequest)
-				return BackupPreflightCompletedMsg{Plan: plan, Err: err}
-			}
+			m.state = StateMigrationAuth
+			return m, m.deps.MigrationAuthenticator.Authenticate()
+		}
+
+	case MigrationAuthenticationCompletedMsg:
+		if m.state != StateMigrationAuth {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.state = StateMigrationAuthFailed
+			return m, nil
+		}
+		m.state = StateBackupPreflight
+		return m, func() tea.Msg {
+			plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), m.deps.LegacyBackupRequest)
+			return BackupPreflightCompletedMsg{Plan: plan, Err: err}
 		}
 
 	case BackupPreflightCompletedMsg:
@@ -341,7 +355,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.state = StateBackupResult
-			m.backupResult = migration.BackupPreflightFailureResult()
+			m.backupResult = migration.BackupPreflightFailureResult(msg.Err)
 			return m, nil
 		}
 		m.backupPlan = msg.Plan
@@ -765,6 +779,10 @@ func (m Model) View() string {
 		return m.blockedOperation.View()
 	case StateActionResult:
 		return m.actionResult.View()
+	case StateMigrationAuth:
+		return m.deps.Theme.TextMuted.Render("Requesting migration authorization in the terminal…")
+	case StateMigrationAuthFailed:
+		return m.deps.Theme.Primary.Bold(true).Render("Migration authorization failed") + "\n\nMigration remains blocked. No backup preflight or filesystem mutation was started.\n"
 	case StateBackupPreflight:
 		return m.deps.Theme.TextMuted.Render("Reviewing legacy backup prerequisites…")
 	case StateBackupConfirm:
@@ -836,5 +854,5 @@ func (m Model) backupStagesView() string {
 }
 
 func hasMigrationCapability(deps Dependencies) bool {
-	return deps.LegacyBackupAction != nil && deps.LegacyRestoreAction != nil && deps.MigrationHandoff != nil
+	return deps.MigrationAuthenticator != nil && deps.LegacyBackupAction != nil && deps.LegacyRestoreAction != nil && deps.MigrationHandoff != nil
 }

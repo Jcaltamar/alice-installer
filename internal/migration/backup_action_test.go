@@ -140,12 +140,12 @@ func TestDestinationStoreExplicitlyElevatesWhenDestinationCreationNeedsPrivilege
 		if name != "sudo" {
 			t.Fatalf("privilege command = %q, want sudo", name)
 		}
-		if len(args) == 3 && args[0] == "mkdir" && args[1] == "-p" {
-			return os.MkdirAll(args[2], 0o700)
+		if len(args) == 4 && args[0] == "-n" && args[1] == "mkdir" && args[2] == "-p" {
+			return os.MkdirAll(args[3], 0o700)
 		}
 		return nil
 	}}
-	store := OSDestinationStore{Privilege: runner}
+	store := OSDestinationStore{Privilege: SudoDestinationPrivilege{Runner: runner}}
 	plan, err := store.Preflight(context.Background(), DestinationRequest{Directory: destination})
 	if err != nil {
 		t.Fatal(err)
@@ -155,12 +155,77 @@ func TestDestinationStoreExplicitlyElevatesWhenDestinationCreationNeedsPrivilege
 		t.Fatalf("Prepare() error = %v", err)
 	}
 	defer artifact.Cleanup()
-	if len(runner.calls) == 0 || runner.calls[0] != "sudo mkdir -p "+destination {
+	if len(runner.calls) == 0 || runner.calls[0] != "sudo -n mkdir -p "+destination {
 		t.Fatalf("elevation calls = %v", runner.calls)
+	}
+	for _, call := range runner.calls {
+		if !strings.HasPrefix(call, "sudo -n ") {
+			t.Fatalf("privileged destination command may prompt: %q", call)
+		}
 	}
 	info, err := os.Stat(destination)
 	if err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("destination info = %v, err = %v", info, err)
+	}
+}
+
+func TestDestinationStoreFailsClosedWhenCachedSudoCredentialExpired(t *testing.T) {
+	root := secureTempDir(t)
+	destination := filepath.Join(root, "alice", "backups")
+	runner := &recordingPrivilegeRunner{run: func(string, ...string) error { return errors.New("sudo credential unavailable") }}
+	store := OSDestinationStore{Privilege: SudoDestinationPrivilege{Runner: runner}}
+	plan, err := store.Preflight(context.Background(), DestinationRequest{Directory: destination})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Prepare(context.Background(), plan); !errors.Is(err, ErrDestinationFailure) {
+		t.Fatalf("Prepare() error = %v, want destination failure", err)
+	}
+	if len(runner.calls) != 1 || !strings.HasPrefix(runner.calls[0], "sudo -n ") {
+		t.Fatalf("credential failure calls = %v", runner.calls)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, ".alice-installer-backup.lock")); !os.IsNotExist(err) {
+		t.Fatalf("credential failure created backup lock: %v", err)
+	}
+}
+
+func TestBackupPreconditionDiagnosticsIdentifyInternalFailure(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		code BackupFailureCode
+	}{
+		{name: "engine unavailable", err: ErrBackupEngineUnavailable, code: BackupFailureEngineUnavailable},
+		{name: "resolved config invalid", err: ErrResolvedConfigInvalid, code: BackupFailureResolvedConfigInvalid},
+		{name: "legacy container invalid", err: ErrLegacyContainerInvalid, code: BackupFailureLegacyContainerInvalid},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BackupPreflightFailureResult(tt.err)
+			if result.FailureCode != tt.code || result.Stages[BackupStagePreconditions].Status != BackupStageFailed || result.Stages[BackupStageDestination].Status != BackupStageNotRun {
+				t.Fatalf("diagnostics = %#v", result)
+			}
+		})
+	}
+}
+
+func TestBackupPreflightClassifiesInternalConsistencyFailures(t *testing.T) {
+	validConfig := testProcessConfig(processSecretSentinel)
+	validContainer := ContainerIdentity{ID: strings.Repeat("a", 64), Image: PostgreSQL11Image}
+	for _, tt := range []struct {
+		name   string
+		action BackupAction
+		want   error
+	}{
+		{name: "engine unavailable", action: BackupAction{}, want: ErrBackupEngineUnavailable},
+		{name: "resolved config invalid", action: BackupAction{Resolver: staticBackupResolver{}, Inspector: staticBackupInspector{identity: validContainer}, Store: OSDestinationStore{}}, want: ErrResolvedConfigInvalid},
+		{name: "legacy container invalid", action: BackupAction{Resolver: staticBackupResolver{config: validConfig}, Inspector: staticBackupInspector{}, Store: OSDestinationStore{}}, want: ErrLegacyContainerInvalid},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.action.Preflight(context.Background(), BackupRequest{Destination: t.TempDir()})
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Preflight() error = %v, want %v", err, tt.want)
+			}
+		})
 	}
 }
 
