@@ -274,7 +274,7 @@ func TestNewDependencies_WiresInteractiveDetectionAndUpdate(t *testing.T) {
 		t.Fatalf("legacy probe = %T, want installation.LegacyFallbackProbe with known directory policy", composite.Legacy)
 	}
 	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
-		if deps.LegacyBackupAction == nil || deps.LegacyRestoreAction == nil || deps.MigrationHandoff == nil || deps.LegacyBackupRequest.ConfigEnvironment != "production" || deps.LegacyBackupRequest.Destination != "/opt/alice/backups/" {
+		if deps.LegacyBackupAction == nil || deps.LegacyRestoreAction == nil || deps.MigrationHandoff == nil || deps.LegacyBackupRequest.ConfigEnvironment != "" || deps.LegacyBackupRequest.Destination != "/opt/alice/backups/" {
 			t.Fatalf("supported interactive platforms must wire backup, restore, and PM2 handoff actions for /opt/alice/backups/, got %q", deps.LegacyBackupRequest.Destination)
 		}
 	} else if deps.LegacyBackupAction != nil || deps.LegacyRestoreAction != nil || deps.MigrationHandoff != nil {

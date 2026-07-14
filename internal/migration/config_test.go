@@ -39,6 +39,46 @@ func TestResolverResolveSupportedConfigurations(t *testing.T) {
 	}
 }
 
+func TestResolverProjectsSelectedEnvironmentFromRealisticSequelizeConfig(t *testing.T) {
+	source, err := os.ReadFile("testdata/sequelize-config.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		env  string
+		want ResolvedConfig
+	}{
+		{"development keeps fallback port and credentials", "development", ResolvedConfig{Environment: EnvironmentDevelopment, Dialect: DialectPostgreSQL, Database: "alice_development", Username: "alice_development_user", Host: "127.0.0.1", Port: 5435}},
+		{"production ignores options and uses default port", "production", ResolvedConfig{Environment: EnvironmentProduction, Dialect: DialectPostgreSQL, Database: "alice_prod", Username: "alice_prod_user", Host: "postgres-prod", Port: 5432}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := (Resolver{Opener: staticOpener{source: string(source)}, Environment: mapEnvironment(nil)}).Resolve(context.Background(), ConfigRequest{Environment: tt.env})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			assertResolvedConfig(t, got, tt.want)
+			assertNoSecret(t, "synthetic-production-secret", got, got.String(), err)
+			assertNoSecret(t, "synthetic-development-secret", got, got.String(), err)
+		})
+	}
+}
+
+func TestResolverRejectsDynamicRequiredFieldsButSkipsOnlyStaticUnknownFields(t *testing.T) {
+	base := `module.exports = { production: { dialect: "postgres", database: "db", username: "user", password: "synthetic-dynamic-secret", host: "host", metadata: { enabled: true, values: [1, null, "ok"] } } };`
+	for _, source := range []string{
+		strings.Replace(base, `database: "db"`, `database: makeDatabase()`, 1),
+		strings.Replace(base, `metadata: { enabled: true, values: [1, null, "ok"] }`, `metadata: loadMetadata()`, 1),
+		strings.Replace(base, `database: "db"`, `database: "first", database: "second"`, 1),
+	} {
+		_, err := (Resolver{Opener: staticOpener{source: source}, Environment: mapEnvironment(nil)}).Resolve(context.Background(), ConfigRequest{Environment: "production"})
+		if !errors.Is(err, ErrConfigInvalid) {
+			t.Fatalf("Resolve() error = %v, want ErrConfigInvalid", err)
+		}
+		assertNoSecret(t, "synthetic-dynamic-secret", err)
+	}
+}
+
 func TestResolverSafeOpenReadBoundary(t *testing.T) {
 	valid := `module.exports = { production: { dialect: "postgres", database: "db", username: "user", password: "` + secretSentinel + `", host: "host" } };`
 	for _, tt := range []struct {
