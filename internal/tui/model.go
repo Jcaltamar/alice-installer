@@ -10,6 +10,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -59,6 +60,7 @@ type Dependencies struct {
 	AsteriskAvailable func() bool
 
 	PreflightCoordinator preflight.Coordinator
+	Detector             installation.Detector
 
 	// Executor is used by the bootstrap state to run elevated commands.
 	// In production: NewExecutor(). In tests: *FakeExecutor.

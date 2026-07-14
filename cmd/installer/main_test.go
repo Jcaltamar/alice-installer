@@ -13,6 +13,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/bootstrap"
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/headless"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/restart"
 	"github.com/jcaltamar/alice-installer/internal/tui"
@@ -202,6 +203,27 @@ func TestParseFlags_UnknownFlagError(t *testing.T) {
 // newDependencies tests
 // ---------------------------------------------------------------------------
 
+func TestUsesOperationalDependencies(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		mode  cliMode
+		flags flags
+		want  bool
+	}{
+		{"interactive install", modeInstall, flags{}, false},
+		{"update", modeUpdate, flags{}, true},
+		{"restart", modeRestart, flags{}, true},
+		{"dry run", modeInstall, flags{DryRun: true}, true},
+		{"unattended", modeInstall, flags{Unattended: true}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := usesOperationalDependencies(tt.mode, tt.flags); got != tt.want {
+				t.Fatalf("usesOperationalDependencies() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	f := flags{
 		MediaDir:  "/opt/alice-media",
@@ -245,6 +267,22 @@ func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	}
 	if deps.ConfigDir == "" {
 		t.Error("deps.ConfigDir is empty")
+	}
+	if deps.Detector == nil {
+		t.Fatal("deps.Detector is nil")
+	}
+	detector, ok := deps.Detector.(installation.CompositeDetector)
+	if !ok {
+		t.Fatalf("deps.Detector = %T, want installation.CompositeDetector", deps.Detector)
+	}
+	if _, ok := detector.Current.(installation.WorkspaceProbe); !ok {
+		t.Fatalf("detector.Current = %T, want installation.WorkspaceProbe", detector.Current)
+	}
+	if _, ok := detector.Legacy.(installation.LegacyFallbackProbe); !ok {
+		t.Fatalf("detector.Legacy = %T, want installation.LegacyFallbackProbe", detector.Legacy)
+	}
+	if operational := newOperationalDependencies(context.Background(), f); operational.Detector != nil {
+		t.Fatalf("operational detector = %T, want nil", operational.Detector)
 	}
 }
 

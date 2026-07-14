@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,6 +23,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/docker"
 	"github.com/jcaltamar/alice-installer/internal/envgen"
 	"github.com/jcaltamar/alice-installer/internal/headless"
+	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
@@ -230,7 +232,15 @@ func parseFlags(args []string) (flags, error) {
 }
 
 // newDependencies constructs all production implementations and returns a tui.Dependencies.
-func newDependencies(_ context.Context, f flags) tui.Dependencies {
+func newDependencies(ctx context.Context, f flags) tui.Dependencies {
+	return buildDependencies(ctx, f, true)
+}
+
+func newOperationalDependencies(ctx context.Context, f flags) tui.Dependencies {
+	return buildDependencies(ctx, f, false)
+}
+
+func buildDependencies(_ context.Context, f flags, interactive bool) tui.Dependencies {
 	ctx := context.Background()
 	th := theme.Default()
 	osGuard := platform.NewRuntimeOSGuard(nil)
@@ -270,7 +280,7 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		EnvExample:   assets.EnvExample,
 	}
 
-	return tui.Dependencies{
+	deps := tui.Dependencies{
 		Theme:                th,
 		OS:                   osGuard,
 		Arch:                 archDetector,
@@ -292,6 +302,24 @@ func newDependencies(_ context.Context, f flags) tui.Dependencies {
 		WorkspaceDir:         f.WorkspaceDir,
 		RequiredTCPPorts:     defaultPorts,
 	}
+	if interactive {
+		deps.Detector = installation.CompositeDetector{
+			Current: installation.WorkspaceProbe{WorkspaceDir: f.WorkspaceDir},
+			Legacy: installation.LegacyFallbackProbe{
+				Directory: installation.KnownLegacyDirectoryProbe{Platform: installation.Platform{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}},
+				PM2: installation.PM2Probe{
+					Runner:   &platform.OSCommandRunner{},
+					Platform: installation.Platform{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH},
+					Policy:   installation.LegacyPolicy{},
+				},
+			},
+		}
+	}
+	return deps
+}
+
+func usesOperationalDependencies(mode cliMode, f flags) bool {
+	return mode == modeUpdate || mode == modeRestart || f.DryRun || f.Unattended
 }
 
 func newAsteriskOptions(configDir string, passwordGen secrets.PasswordGenerator) asterisk.Options {
@@ -398,7 +426,11 @@ func runWithStaleCheck(
 	}
 
 	if factory == nil {
-		factory = newDependencies
+		if usesOperationalDependencies(mode, f) {
+			factory = newOperationalDependencies
+		} else {
+			factory = newDependencies
+		}
 	}
 
 	ctx := context.Background()
