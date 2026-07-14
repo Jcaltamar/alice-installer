@@ -3,6 +3,8 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"regexp"
 	"sort"
 )
@@ -12,6 +14,10 @@ const PostgreSQL11Image ImageIdentity = "bitnami/postgresql:11-debian-10"
 var (
 	ErrContainerPrecondition = errors.New("legacy database container precondition failed")
 	ErrAmbiguousContainer    = errors.New("legacy database container is ambiguous")
+	ErrNoExactImageCandidate = errors.New("no exact-image legacy database container candidate")
+	ErrContainerIdentity     = errors.New("legacy database container identity mismatch")
+	ErrContainerEndpoint     = errors.New("legacy database container endpoint mismatch")
+	ErrContainerUnsafeState  = errors.New("legacy database container has unsafe state or provenance")
 )
 
 type ImageIdentity string
@@ -46,6 +52,13 @@ type ContainerEndpoint struct {
 	ContainerLocal bool
 }
 
+// PublishedPortBinding is the bounded subset of Docker port data used for loopback correlation.
+type PublishedPortBinding struct {
+	HostIP        string
+	HostPort      int
+	ContainerPort int
+}
+
 // SafeContainerLabels is the allowlist used for correlation; no arbitrary Docker labels escape inspection.
 type SafeContainerLabels struct {
 	ComposeProject string
@@ -54,17 +67,18 @@ type SafeContainerLabels struct {
 
 // ContainerDetails contains only non-secret, allowlisted metadata required by the selector.
 type ContainerDetails struct {
-	ID            string
-	Image         string
-	Digest        string
-	State         ContainerState
-	Health        HealthStatus
-	NetworkMode   string
-	DatabaseNames []string
-	Usernames     []string
-	Endpoints     []ContainerEndpoint
-	MountKinds    []string
-	Labels        SafeContainerLabels
+	ID             string
+	Image          string
+	Digest         string
+	State          ContainerState
+	Health         HealthStatus
+	NetworkMode    string
+	DatabaseNames  []string
+	Usernames      []string
+	Endpoints      []ContainerEndpoint
+	PublishedPorts []PublishedPortBinding
+	MountKinds     []string
+	Labels         SafeContainerLabels
 }
 
 // ContainerIdentity is the immutable, safe result of successful correlation.
@@ -91,6 +105,9 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 	if err != nil {
 		return ContainerIdentity{}, ErrContainerPrecondition
 	}
+	if len(candidates) == 0 {
+		return ContainerIdentity{}, classifiedContainerError(ErrNoExactImageCandidate)
+	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
 	// Inspect every list candidate before making any decision: partial inspection is not evidence.
 	detailsByID := make(map[string]ContainerDetails, len(candidates))
@@ -111,18 +128,28 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 		return ContainerIdentity{}, ErrContainerPrecondition
 	}
 	matches := make([]ContainerIdentity, 0, len(candidates))
+	identityMismatch, endpointMismatch, unsafeCandidate := false, false, false
 	for _, candidate := range candidates {
 		details := detailsByID[candidate.ID]
-		corroborated, unsafe := correlateCandidate(details, config)
-		if unsafe {
-			return ContainerIdentity{}, ErrContainerPrecondition
-		}
+		corroborated, reason := correlateCandidate(details, config)
+		identityMismatch = identityMismatch || reason == ErrContainerIdentity
+		endpointMismatch = endpointMismatch || reason == ErrContainerEndpoint
+		unsafeCandidate = unsafeCandidate || reason == ErrContainerUnsafeState
 		if corroborated {
 			matches = append(matches, ContainerIdentity{ID: details.ID, Image: PostgreSQL11Image, Digest: details.Digest})
 		}
 	}
 	if len(matches) == 0 {
-		return ContainerIdentity{}, ErrContainerPrecondition
+		switch {
+		case unsafeCandidate:
+			return ContainerIdentity{}, classifiedContainerError(ErrContainerUnsafeState)
+		case endpointMismatch:
+			return ContainerIdentity{}, classifiedContainerError(ErrContainerEndpoint)
+		case identityMismatch:
+			return ContainerIdentity{}, classifiedContainerError(ErrContainerIdentity)
+		default:
+			return ContainerIdentity{}, ErrContainerPrecondition
+		}
 	}
 	if len(matches) != 1 {
 		return ContainerIdentity{}, ErrAmbiguousContainer
@@ -132,19 +159,31 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 
 // correlateCandidate distinguishes insufficient unrelated evidence from unsafe contradictions.
 // It is called only after every exact-image candidate has been inspected successfully.
-func correlateCandidate(details ContainerDetails, config ResolvedConfig) (corroborated, unsafe bool) {
+func correlateCandidate(details ContainerDetails, config ResolvedConfig) (bool, error) {
 	if !fullContainerID.MatchString(details.ID) || details.Image != string(PostgreSQL11Image) {
-		return false, true
+		return false, ErrContainerIdentity
+	}
+	if !contains(details.DatabaseNames, config.Database) || !contains(details.Usernames, config.Username) {
+		return false, ErrContainerIdentity
 	}
 	endpointMatches, endpointConflicts := containerLocalEndpointEvidence(details.Endpoints, config.Host, config.Port)
-	identityMatches := contains(details.DatabaseNames, config.Database) && contains(details.Usernames, config.Username) && endpointMatches
-	if !identityMatches {
-		return false, false
+	if loopbackFamily(config.Host) != 0 {
+		endpointMatches = endpointMatches || publishedEndpointEvidence(details.PublishedPorts, config.Host, config.Port)
+	}
+	if !endpointMatches {
+		return false, ErrContainerEndpoint
 	}
 	if endpointConflicts || details.State != ContainerRunning || details.Health == HealthUnhealthy || details.Health == HealthUnknown {
-		return false, true
+		return false, ErrContainerUnsafeState
 	}
-	return len(details.MountKinds) > 0 || details.Labels.ComposeProject != "" || details.Labels.ComposeService != "", false
+	if len(details.MountKinds) == 0 && details.Labels.ComposeProject == "" && details.Labels.ComposeService == "" {
+		return false, ErrContainerUnsafeState
+	}
+	return true, nil
+}
+
+func classifiedContainerError(reason error) error {
+	return fmt.Errorf("%w: %w", ErrContainerPrecondition, reason)
 }
 
 func containerLocalEndpointEvidence(endpoints []ContainerEndpoint, host string, port int) (matches, conflicts bool) {
@@ -159,6 +198,46 @@ func containerLocalEndpointEvidence(endpoints []ContainerEndpoint, host string, 
 		conflicts = true
 	}
 	return matches, conflicts
+}
+
+func publishedEndpointEvidence(bindings []PublishedPortBinding, host string, hostPort int) bool {
+	family := loopbackFamily(host)
+	if family == 0 {
+		return false
+	}
+	for _, binding := range bindings {
+		if binding.HostPort == hostPort && binding.ContainerPort == 5432 && bindingReachableFromLoopback(binding.HostIP, family) {
+			return true
+		}
+	}
+	return false
+}
+
+// loopbackFamily returns 4, 6, or 46 for localhost, which may resolve to either family.
+func loopbackFamily(host string) int {
+	if host == "localhost" {
+		return 46
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return 0
+	}
+	if ip.To4() != nil {
+		return 4
+	}
+	return 6
+}
+
+func bindingReachableFromLoopback(hostIP string, family int) bool {
+	ip := net.ParseIP(hostIP)
+	if ip == nil || !ip.IsUnspecified() && !ip.IsLoopback() {
+		return false
+	}
+	bindingFamily := 6
+	if ip.To4() != nil {
+		bindingFamily = 4
+	}
+	return family == 46 || family == bindingFamily
 }
 
 func contains(values []string, want string) bool {
