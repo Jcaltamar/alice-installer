@@ -235,20 +235,20 @@ func TestOSBinaryExecutorCancellationTerminatesDescendantProcessGroup(t *testing
 }
 
 type lockedBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
+	mu     sync.Mutex
+	buffer bytes.Buffer
 }
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 
 func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.String()
+	return b.buffer.String()
 }
 
 type terminalFakeExecutor struct {

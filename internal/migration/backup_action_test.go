@@ -92,8 +92,17 @@ func TestDestinationStoreAllowsSecureRootOwnedParentsForDefaultDestination(t *te
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux ownership policy")
 	}
+	const destination = "/opt/alice/backups/"
+	parent := nearestExisting(destination)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatalf("default destination parent stat error = %v", err)
+	}
+	if !safeDirectory(parent) && !safeRootOwnedAncestor(parentInfo) {
+		t.Skipf("host %s is not a secure root-owned ancestor", parent)
+	}
 	store := OSDestinationStore{}
-	plan, err := store.Preflight(context.Background(), DestinationRequest{Directory: "/opt/alice/backups/"})
+	plan, err := store.Preflight(context.Background(), DestinationRequest{Directory: destination})
 	if err != nil {
 		t.Fatalf("default destination preflight error = %v", err)
 	}
