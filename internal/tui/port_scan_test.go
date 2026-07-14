@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,6 +23,28 @@ func newTestPortScan(occupied []int) PortScanModel {
 		defaultPorts,
 		nil, // no UDP ports in these tests
 	)
+}
+
+func TestPortScanViews(t *testing.T) {
+	m := newTestPortScan(nil)
+	if view := m.View(); !strings.Contains(view, "Scanning required ports") {
+		t.Fatalf("scanning view = %q", view)
+	}
+	result := PortScanResultMsg{}
+	m.result = &result
+	if view := m.View(); !strings.Contains(view, "All required ports are available") {
+		t.Fatalf("available view = %q", view)
+	}
+	m.resolving = true
+	m.currentKey, m.currentPort = "POSTGRES_PORT", 5432
+	m.conflicts = []PortConflict{{Key: "POSTGRES_PORT", Requested: 5432}, {Key: "REDIS_PORT", Requested: 6379}}
+	m.err = "still occupied"
+	view := m.View()
+	for _, text := range []string{"POSTGRES_PORT", "still occupied", "1 more conflict"} {
+		if !strings.Contains(view, text) {
+			t.Fatalf("conflict view = %q, want %q", view, text)
+		}
+	}
 }
 
 // TestPortScanInitReturnsCmd verifies Init() returns a non-nil Cmd.

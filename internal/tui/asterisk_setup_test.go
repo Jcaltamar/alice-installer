@@ -78,6 +78,29 @@ func TestAsteriskSetupModelReportsOptionalFailure(t *testing.T) {
 	}
 }
 
+func TestAsteriskSetupModelViews(t *testing.T) {
+	model := NewAsteriskSetupModel(themeDefaultForTest(), &recordingAsteriskInstaller{}, asterisk.Options{Enabled: true})
+	if view := model.View(); !strings.Contains(view, "Preparing host Asterisk") {
+		t.Fatalf("pending view = %q", view)
+	}
+	model.err = errors.New("setup failed")
+	if view := model.View(); !strings.Contains(view, "setup failed") {
+		t.Fatalf("failure view = %q", view)
+	}
+	model.err = nil
+	model.done = true
+	model.result = asterisk.Result{AMIEndpoint: "127.0.0.1:5038"}
+	if view := model.View(); !strings.Contains(view, "127.0.0.1:5038") {
+		t.Fatalf("success view = %q", view)
+	}
+}
+
+func TestRootModelInitDelegatesToSplash(t *testing.T) {
+	if cmd := NewModel(buildTestDeps()).Init(); cmd != nil {
+		t.Fatalf("root Init command = %v, want nil splash command", cmd)
+	}
+}
+
 func TestAsteriskSetupModelCompletionAdvancesToPull(t *testing.T) {
 	t.Parallel()
 
