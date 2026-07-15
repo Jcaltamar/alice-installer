@@ -11,6 +11,15 @@ import (
 
 const PostgreSQL11Image ImageIdentity = "bitnami/postgresql:11-debian-10"
 
+func canonicalPostgreSQL11Image(reference string) (ImageIdentity, bool) {
+	switch reference {
+	case string(PostgreSQL11Image), "docker.io/bitnami/postgresql:11-debian-10":
+		return PostgreSQL11Image, true
+	default:
+		return "", false
+	}
+}
+
 var (
 	ErrContainerPrecondition = errors.New("legacy database container precondition failed")
 	ErrAmbiguousContainer    = errors.New("legacy database container is ambiguous")
@@ -113,7 +122,7 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 	detailsByID := make(map[string]ContainerDetails, len(candidates))
 	inspectionFailed := false
 	for _, candidate := range candidates {
-		if candidate.Image != string(PostgreSQL11Image) || !fullContainerID.MatchString(candidate.ID) {
+		if _, trusted := canonicalPostgreSQL11Image(candidate.Image); !trusted || !fullContainerID.MatchString(candidate.ID) {
 			inspectionFailed = true
 			continue
 		}
@@ -160,7 +169,7 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 // correlateCandidate distinguishes insufficient unrelated evidence from unsafe contradictions.
 // It is called only after every exact-image candidate has been inspected successfully.
 func correlateCandidate(details ContainerDetails, config ResolvedConfig) (bool, error) {
-	if !fullContainerID.MatchString(details.ID) || details.Image != string(PostgreSQL11Image) {
+	if _, trusted := canonicalPostgreSQL11Image(details.Image); !fullContainerID.MatchString(details.ID) || !trusted {
 		return false, ErrContainerIdentity
 	}
 	if !contains(details.DatabaseNames, config.Database) || !contains(details.Usernames, config.Username) {

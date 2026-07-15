@@ -287,6 +287,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 
 	deps := tui.Dependencies{
 		Theme:                th,
+		Version:              version,
 		OS:                   osGuard,
 		Arch:                 archDetector,
 		GPU:                  gpuDetector,

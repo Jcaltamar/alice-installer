@@ -32,13 +32,14 @@ const (
 //   - Enter → emits DetectionStartedMsg to advance to installation detection.
 //   - Any other key → no-op.
 type SplashModel struct {
-	theme theme.Theme
-	icon  string
+	theme   theme.Theme
+	icon    string
+	version string
 }
 
 // NewSplashModel constructs a SplashModel with the given theme.
-func NewSplashModel(th theme.Theme) SplashModel {
-	return SplashModel{theme: th, icon: renderSplashIcon()}
+func NewSplashModel(th theme.Theme, version string) SplashModel {
+	return SplashModel{theme: th, icon: renderSplashIcon(), version: version}
 }
 
 // Init implements tea.Model.
@@ -64,7 +65,7 @@ func (s SplashModel) Update(msg tea.Msg) (SplashModel, tea.Cmd) {
 // Renders the icon, the ALICE GUARDIAN wordmark, and the subtitle.
 func (s SplashModel) View() string {
 	wordmark := s.theme.Primary.Bold(true).Render("  ALICE GUARDIAN")
-	subtitle := s.theme.TextMuted.Render("  Installer v0.1.0  —  press Enter to start")
+	subtitle := s.theme.TextMuted.Render("  Installer " + s.version + "  —  press Enter to start")
 	return s.icon + "\n" + wordmark + "\n\n" + subtitle + "\n"
 }
 

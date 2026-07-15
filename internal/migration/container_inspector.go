@@ -33,8 +33,8 @@ func (i DockerCLIInspector) Candidates(ctx context.Context, image ImageIdentity)
 		if len(parts) != 2 || !fullContainerID.MatchString(parts[0]) {
 			return nil, ErrContainerPrecondition
 		}
-		if parts[1] == string(image) {
-			candidates = append(candidates, ContainerSummary{ID: parts[0], Image: parts[1]})
+		if canonical, trusted := canonicalPostgreSQL11Image(parts[1]); trusted && canonical == image {
+			candidates = append(candidates, ContainerSummary{ID: parts[0], Image: string(canonical)})
 		}
 	}
 	return candidates, nil
@@ -91,10 +91,11 @@ type dockerInspect struct {
 }
 
 func safeDetails(raw dockerInspect) (ContainerDetails, bool) {
-	if !fullContainerID.MatchString(raw.ID) || raw.Config.Image != string(PostgreSQL11Image) {
+	canonicalImage, trusted := canonicalPostgreSQL11Image(raw.Config.Image)
+	if !fullContainerID.MatchString(raw.ID) || !trusted {
 		return ContainerDetails{}, false
 	}
-	details := ContainerDetails{ID: raw.ID, Image: raw.Config.Image, NetworkMode: raw.HostConfig.NetworkMode, Health: HealthNone, Labels: SafeContainerLabels{ComposeProject: raw.Config.Labels["com.docker.compose.project"], ComposeService: raw.Config.Labels["com.docker.compose.service"]}}
+	details := ContainerDetails{ID: raw.ID, Image: string(canonicalImage), NetworkMode: raw.HostConfig.NetworkMode, Health: HealthNone, Labels: SafeContainerLabels{ComposeProject: raw.Config.Labels["com.docker.compose.project"], ComposeService: raw.Config.Labels["com.docker.compose.service"]}}
 	if raw.State.Running {
 		details.State = ContainerRunning
 	} else {

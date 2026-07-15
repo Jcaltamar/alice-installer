@@ -70,6 +70,7 @@ type TemplateAssets struct {
 // Every field is an interface so tests can inject fakes without globals.
 type Dependencies struct {
 	Theme                  theme.Theme
+	Version                string
 	OS                     platform.OSGuard
 	Arch                   platform.ArchDetector
 	GPU                    platform.GPUDetector
@@ -191,7 +192,7 @@ func NewModel(deps Dependencies) Model {
 		state:                 StateSplash,
 		gpuDetected:           gpuDetected,
 		attemptedActions:      map[string]bool{},
-		splash:                NewSplashModel(deps.Theme),
+		splash:                NewSplashModel(deps.Theme, deps.Version),
 		preflight:             NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
 		workspace:             NewWorkspaceInputModel(deps.Theme),
 		optionalPackagesModel: NewOptionalPackagesModel(deps.Theme, asteriskAvailable(deps)),
