@@ -34,6 +34,19 @@ func TestLinuxSocketSnapshotUsesFixedBoundedRedactedAcquisition(t *testing.T) {
 			if strings.Contains(errorText(err), secret) {
 				t.Fatal("raw command output leaked through error")
 			}
+			if tt.wantErr == "socket snapshot output is invalid" || tt.wantErr == "socket snapshot output exceeded limit" {
+				var observation pm2ObservationError
+				if !errors.As(err, &observation) {
+					t.Fatalf("error = %v, want observation diagnostic", err)
+				}
+				wantCause := "output-invalid"
+				if tt.wantErr == "socket snapshot output exceeded limit" {
+					wantCause = "output-too-large"
+				}
+				if observation.Diagnostic.Operation != "socket-listeners" || observation.Diagnostic.Command != "sudo -n ss -H -ltnp" || observation.Diagnostic.Cause != wantCause {
+					t.Fatalf("diagnostic = %#v", observation.Diagnostic)
+				}
+			}
 			if tt.runner.name != "ss" || tt.runner.args != "-H -ltnp" {
 				t.Fatalf("command = %q %q", tt.runner.name, tt.runner.args)
 			}

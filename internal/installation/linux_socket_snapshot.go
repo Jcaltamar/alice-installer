@@ -46,11 +46,11 @@ func (s LinuxSocketSnapshot) Snapshot(ctx context.Context) ([]SocketOwner, error
 		return nil, contextErr
 	}
 	if len(stdout) > acquisitionOutputLimit(s.MaxOutput) {
-		return nil, errors.New("socket snapshot output exceeded limit")
+		return nil, wrapObservationUnavailable("socket snapshot output exceeded limit", observationOutputError("socket-listeners", "sudo -n ss -H -ltnp", "output-too-large"))
 	}
 	owners, err := ParseSocketSnapshot(stdout)
 	if err != nil {
-		return nil, errors.New("socket snapshot output is invalid")
+		return nil, wrapObservationUnavailable("socket snapshot output is invalid", observationOutputError("socket-listeners", "sudo -n ss -H -ltnp", "output-invalid"))
 	}
 	return owners, nil
 }

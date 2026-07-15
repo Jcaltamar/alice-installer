@@ -39,25 +39,28 @@ func (b RootPM2Boundary) Read(ctx context.Context, pid int) (ProcIdentity, error
 	if err != nil {
 		return ProcIdentity{}, wrapObservationUnavailable("proc cwd is unavailable", err)
 	}
+	if !filepath.IsAbs(string(cwd)) {
+		return ProcIdentity{}, wrapObservationUnavailable("proc cwd is unavailable", observationOutputError("proc-cwd", procObservationCommand("proc-cwd", pid), "output-invalid"))
+	}
 	exe, err := b.read(ctx, "proc-exe", "readlink", base+"exe")
 	if err != nil {
 		return ProcIdentity{}, wrapObservationUnavailable("proc executable is unavailable", err)
+	}
+	if !filepath.IsAbs(string(exe)) {
+		return ProcIdentity{}, wrapObservationUnavailable("proc executable is unavailable", observationOutputError("proc-exe", procObservationCommand("proc-exe", pid), "output-invalid"))
 	}
 	stat, err := b.read(ctx, "proc-stat", "cat", base+"stat")
 	if err != nil {
 		return ProcIdentity{}, wrapObservationUnavailable("proc stat is unavailable", err)
 	}
 	if len(stat) > defaultProcStatLimit {
-		return ProcIdentity{}, errors.New("proc stat is unavailable")
+		return ProcIdentity{}, wrapObservationUnavailable("proc stat is unavailable", observationOutputError("proc-stat", procObservationCommand("proc-stat", pid), "output-too-large"))
 	}
 	ticks, err := ParseProcStartTicks(stat)
 	if err != nil {
-		return ProcIdentity{}, err
+		return ProcIdentity{}, wrapObservationUnavailable("proc stat is unavailable", observationOutputError("proc-stat", procObservationCommand("proc-stat", pid), "output-invalid"))
 	}
 	cwdPath, exePath := string(cwd), string(exe)
-	if !filepath.IsAbs(cwdPath) || !filepath.IsAbs(exePath) {
-		return ProcIdentity{}, errors.New("proc link is unavailable")
-	}
 	return ProcIdentity{CWD: filepath.Clean(cwdPath), ExecPath: filepath.Clean(exePath), StartTicks: ticks}, nil
 }
 
@@ -69,6 +72,10 @@ func (b RootPM2Boundary) read(ctx context.Context, operation, executable, path s
 	if err != nil {
 		pid, _ := strconv.Atoi(strings.Split(path, "/")[2])
 		return nil, observationCommandError(ctx, operation, procObservationCommand(operation, pid), stderr, err)
+	}
+	if len(out) > defaultProcStatLimit {
+		pid, _ := strconv.Atoi(strings.Split(path, "/")[2])
+		return nil, observationOutputError(operation, procObservationCommand(operation, pid), "output-too-large")
 	}
 	return []byte(strings.TrimSpace(string(out))), nil
 }

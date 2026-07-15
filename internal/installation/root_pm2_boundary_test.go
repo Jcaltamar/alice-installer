@@ -148,3 +148,35 @@ func TestRootPM2BoundaryReadsExactProcIdentity(t *testing.T) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
+
+func TestRootPM2BoundaryClassifiesUnusableProcOutput(t *testing.T) {
+	stat := []byte("1230 (node) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 42")
+	for _, tt := range []struct {
+		name      string
+		outputs   [][]byte
+		operation string
+		command   string
+		cause     string
+	}{
+		{name: "invalid cwd", outputs: [][]byte{[]byte("relative-secret")}, operation: "proc-cwd", command: "sudo -n readlink /proc/1230/cwd", cause: "output-invalid"},
+		{name: "oversized cwd", outputs: [][]byte{[]byte("/" + strings.Repeat("S", defaultProcStatLimit+1))}, operation: "proc-cwd", command: "sudo -n readlink /proc/1230/cwd", cause: "output-too-large"},
+		{name: "invalid executable", outputs: [][]byte{[]byte("/opt/alice"), []byte("relative-secret")}, operation: "proc-exe", command: "sudo -n readlink /proc/1230/exe", cause: "output-invalid"},
+		{name: "oversized stat", outputs: [][]byte{[]byte("/opt/alice"), []byte("/usr/bin/node"), []byte(strings.Repeat("S", defaultProcStatLimit+1))}, operation: "proc-stat", command: "sudo -n cat /proc/1230/stat", cause: "output-too-large"},
+		{name: "invalid stat", outputs: [][]byte{[]byte("/opt/alice"), []byte("/usr/bin/node"), append(stat[:10], []byte(" DATABASE_URL=postgres://secret")...)}, operation: "proc-stat", command: "sudo -n cat /proc/1230/stat", cause: "output-invalid"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := (RootPM2Boundary{Runner: &rootRunner{outputs: tt.outputs}}).Read(context.Background(), 1230)
+			var observation pm2ObservationError
+			if !errors.As(err, &observation) {
+				t.Fatalf("error = %v, want observation diagnostic", err)
+			}
+			diagnostic := observation.Diagnostic
+			if diagnostic.Operation != tt.operation || diagnostic.Command != tt.command || diagnostic.Cause != tt.cause {
+				t.Fatalf("diagnostic = %#v", diagnostic)
+			}
+			if strings.Contains(err.Error(), "DATABASE_URL") || strings.Contains(err.Error(), "postgres://secret") || strings.Contains(err.Error(), "relative-secret") {
+				t.Fatalf("diagnostic leaked command output: %q", err)
+			}
+		})
+	}
+}

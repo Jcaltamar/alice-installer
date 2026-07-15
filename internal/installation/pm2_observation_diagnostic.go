@@ -29,11 +29,16 @@ func (d PM2ObservationDiagnostic) String() string {
 	if d.StopProofCancelled {
 		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof was cancelled before PM2 status stopped and port release on %d were proven", d.PMID, d.Port)
 	}
-	parts := []string{
-		"stage=" + d.Stage,
-		"operation=" + d.Operation,
-		"command=" + d.Command,
-		"cause=" + d.Cause,
+	parts := make([]string, 0, 5)
+	for _, part := range []struct{ key, value string }{
+		{"stage", d.Stage},
+		{"operation", d.Operation},
+		{"command", d.Command},
+		{"cause", d.Cause},
+	} {
+		if part.value != "" {
+			parts = append(parts, part.key+"="+part.value)
+		}
 	}
 	if stderr := safeObservationStderr([]byte(d.Stderr)); stderr != "" {
 		parts = append(parts, "stderr="+stderr)
@@ -63,6 +68,14 @@ func observationCommandError(ctx context.Context, operation, command string, std
 		Command:   command,
 		Cause:     observationCause(ctx, err),
 		Stderr:    safeObservationStderr(stderr),
+	}}
+}
+
+func observationOutputError(operation, command, cause string) error {
+	return pm2ObservationError{Diagnostic: PM2ObservationDiagnostic{
+		Operation: operation,
+		Command:   command,
+		Cause:     cause,
 	}}
 }
 
@@ -102,7 +115,7 @@ func safeObservationStderr(stderr []byte) string {
 func withObservationStage(err error, stage string) *PM2ObservationDiagnostic {
 	var observation pm2ObservationError
 	if !errors.As(err, &observation) {
-		return nil
+		return &PM2ObservationDiagnostic{Stage: stage, Operation: "observation", Cause: "unavailable"}
 	}
 	diagnostic := observation.Diagnostic
 	diagnostic.Stage = stage

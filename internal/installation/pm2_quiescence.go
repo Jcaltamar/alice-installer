@@ -114,11 +114,11 @@ func (i LinuxPM2Inventory) Snapshot(ctx context.Context) ([]PM2Record, error) {
 		return nil, contextErr
 	}
 	if len(stdout) > acquisitionOutputLimit(i.MaxOutput) {
-		return nil, errors.New("pm2 inventory output exceeded limit")
+		return nil, wrapObservationUnavailable("pm2 inventory output exceeded limit", observationOutputError("pm2-jlist", "sudo -n pm2 jlist", "output-too-large"))
 	}
 	records, err := ParsePM2Inventory(stdout)
 	if err != nil {
-		return nil, errors.New("pm2 inventory output is invalid")
+		return nil, wrapObservationUnavailable("pm2 inventory output is invalid", observationOutputError("pm2-jlist", "sudo -n pm2 jlist", "output-invalid"))
 	}
 	return records, nil
 }

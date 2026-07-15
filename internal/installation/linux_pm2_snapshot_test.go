@@ -33,6 +33,8 @@ func TestLinuxPM2SnapshotProvider(t *testing.T) {
 			runner := &snapshotRunner{}
 			if _, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: runner}}).Quiesce(context.Background()); err == nil || runner.calls != 0 {
 				t.Fatalf("Quiesce() error/calls = %v/%d, want fail-closed/0", err, runner.calls)
+			} else if diagnostic := withObservationStage(err, "initial-snapshot"); diagnostic == nil || diagnostic.Stage != "initial-snapshot" || diagnostic.Operation == "" || diagnostic.Cause == "" || diagnostic.Command != "" {
+				t.Fatalf("diagnostic = %#v, want bounded non-command identity diagnostic", diagnostic)
 			}
 		})
 	}
