@@ -38,9 +38,9 @@ func (s LinuxSocketSnapshot) Snapshot(ctx context.Context) ([]SocketOwner, error
 	stdout, _, err := s.Runner.Run(commandCtx, "ss", "-H", "-ltnp")
 	if err != nil {
 		if contextErr := acquisitionContextError(commandCtx, "socket snapshot"); contextErr != nil {
-			return nil, contextErr
+			return nil, wrapObservationUnavailable(contextErr.Error(), err)
 		}
-		return nil, errors.New("socket snapshot command failed")
+		return nil, wrapObservationUnavailable("socket snapshot command failed", err)
 	}
 	if contextErr := acquisitionContextError(commandCtx, "socket snapshot"); contextErr != nil {
 		return nil, contextErr

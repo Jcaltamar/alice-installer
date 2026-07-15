@@ -153,6 +153,7 @@ type Model struct {
 	restoreResult         migration.RestoreResult
 	migrationLease        *migration.PreInstallMigrationLease
 	migrationRecoveryCode string
+	migrationDiagnostic   string
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -489,6 +490,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil || msg.Lease == nil {
 			m.state = StateMigrationResult
 			m.migrationRecoveryCode = boundedQuiescenceCode(msg.Err)
+			m.migrationDiagnostic = boundedQuiescenceDiagnostic(msg.Err)
 			return m, nil
 		}
 		m.migrationLease = msg.Lease

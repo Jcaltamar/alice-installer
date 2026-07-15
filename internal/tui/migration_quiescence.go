@@ -125,6 +125,14 @@ func boundedQuiescenceCode(err error) string {
 	return "pm2-quiescence-unavailable"
 }
 
+func boundedQuiescenceDiagnostic(err error) string {
+	var failure installation.QuiescenceError
+	if !errors.As(err, &failure) || failure.Code != "pm2-observation-unavailable" || failure.Diagnostic == nil {
+		return ""
+	}
+	return failure.Diagnostic.String()
+}
+
 func (m Model) migrationQuiescenceView() string {
 	return m.deps.Theme.TextMuted.Render("Quiescing confirmed legacy services and applying the selected PostgreSQL disposition before installation. Press Escape to cancel safely.\n")
 }
@@ -135,6 +143,9 @@ func (m Model) migrationRecoveryView() string {
 
 func (m Model) migrationTerminalView() string {
 	message := "Migration did not complete. The installer did not report installation success. Recovery status: " + m.migrationRecoveryCode + "."
+	if m.migrationDiagnostic != "" {
+		message += " Observation diagnostic: " + m.migrationDiagnostic + "."
+	}
 	if m.migrationRecoveryCode == migration.DispositionManualRecoveryCode {
 		message += " The legacy container was removed and cannot be recreated automatically; use the preserved volumes and validated backup for bounded manual recovery."
 	}

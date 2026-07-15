@@ -51,9 +51,17 @@ type PM2Recovery struct {
 	Code                 string
 }
 
-type QuiescenceError struct{ Code string }
+type QuiescenceError struct {
+	Code       string
+	Diagnostic *PM2ObservationDiagnostic
+}
 
-func (e QuiescenceError) Error() string { return e.Code }
+func (e QuiescenceError) Error() string {
+	if e.Diagnostic != nil {
+		return e.Code + ": " + e.Diagnostic.String()
+	}
+	return e.Code
+}
 
 // LegacyPM2Quiescer lets migration own a lease without PM2 command construction.
 type LegacyPM2Quiescer interface {
@@ -98,9 +106,9 @@ func (i LinuxPM2Inventory) Snapshot(ctx context.Context) ([]PM2Record, error) {
 	stdout, _, err := i.Runner.Run(commandCtx, "pm2", "jlist")
 	if err != nil {
 		if contextErr := acquisitionContextError(commandCtx, "pm2 inventory"); contextErr != nil {
-			return nil, contextErr
+			return nil, wrapObservationUnavailable(contextErr.Error(), err)
 		}
-		return nil, errors.New("pm2 inventory command failed")
+		return nil, wrapObservationUnavailable("pm2 inventory command failed", err)
 	}
 	if contextErr := acquisitionContextError(commandCtx, "pm2 inventory"); contextErr != nil {
 		return nil, contextErr
@@ -286,7 +294,7 @@ type PM2Quiescer struct {
 func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 	initial, err := q.snapshot(ctx)
 	if err != nil {
-		return PM2Quiescence{}, QuiescenceError{Code: "pm2-observation-unavailable"}
+		return PM2Quiescence{}, QuiescenceError{Code: "pm2-observation-unavailable", Diagnostic: withObservationStage(err, "initial-snapshot")}
 	}
 	pending, err := CorrelatePM2(initial.Records, initial.Sockets, initial.Proc)
 	if err != nil {
@@ -296,7 +304,7 @@ func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 	for len(pending) > 0 {
 		current, err := q.snapshot(ctx)
 		if err != nil {
-			return stopped, QuiescenceError{Code: "pm2-observation-unavailable"}
+			return stopped, QuiescenceError{Code: "pm2-observation-unavailable", Diagnostic: withObservationStage(err, "pre-stop-snapshot")}
 		}
 		active, err := CorrelatePM2(current.Records, current.Sockets, current.Proc)
 		if err != nil || !sameIdentities(active, pending) {
