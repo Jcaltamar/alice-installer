@@ -44,6 +44,10 @@ type LegacyBackupAction interface {
 	Run(context.Context, migration.BackupPlan) migration.BackupResult
 }
 
+type legacyBackupProgressAction interface {
+	RunWithProgress(context.Context, migration.BackupPlan, func(migration.BackupProgressStage)) migration.BackupResult
+}
+
 type ContextMenuModel struct {
 	theme              theme.Theme
 	detection          installation.Detection

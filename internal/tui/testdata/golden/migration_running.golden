@@ -1,1 +1,5 @@
-[38;2;100;116;139mCreating backup: dump, validate, and publish. Press Escape to cancel safely.[0m
+[1;38;2;34;211;238mCreating validated backup[0m
+
+[38;2;34;211;238m⣾ [0m [38;2;100;116;139mPreparing destination and credentials (0s elapsed)[0m
+
+[38;2;100;116;139mPress Escape to cancel safely.[0m
