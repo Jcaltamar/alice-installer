@@ -15,6 +15,8 @@ const guardianRoot = "/opt/alice-guardian"
 const backendRoot = "/opt/backend_alice_guardian"
 const defaultPM2AcquisitionTimeout = 5 * time.Second
 const defaultPM2AcquisitionOutputLimit = 64 * 1024
+const defaultPM2StopProofTimeout = 2 * time.Second
+const defaultPM2StopProofInterval = 100 * time.Millisecond
 
 type PM2Record struct {
 	ID                          int64
@@ -32,11 +34,12 @@ type PM2ProcessIdentity struct {
 	StartTicks      uint64
 }
 type PM2StoppedEvidence struct {
-	PMID         int64
-	OriginalPID  int
-	Port         uint16
-	StartTicks   uint64
-	StopVerified bool
+	PMID                 int64
+	OriginalPID          int
+	Port                 uint16
+	StartTicks           uint64
+	StopCommandSucceeded bool
+	StopVerified         bool
 }
 type PM2Quiescence struct {
 	Processes []PM2ProcessIdentity
@@ -274,8 +277,10 @@ type PM2SnapshotProvider interface {
 	Snapshot(context.Context) (PM2Snapshot, error)
 }
 type PM2Quiescer struct {
-	Snapshots  PM2SnapshotProvider
-	Controller PM2Controller
+	Snapshots         PM2SnapshotProvider
+	Controller        PM2Controller
+	StopProofTimeout  time.Duration
+	StopProofInterval time.Duration
 }
 
 func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
@@ -301,10 +306,11 @@ func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 		if err := q.Controller.Stop(ctx, target); err != nil {
 			return stopped, QuiescenceError{Code: "pm2-stop-failed"}
 		}
-		if after, err := q.snapshot(ctx); err != nil || !stoppedAndReleased(after, target) {
+		stopped.Evidence = append(stopped.Evidence, PM2StoppedEvidence{PMID: target.PMID, OriginalPID: target.PID, Port: target.Port, StartTicks: target.StartTicks, StopCommandSucceeded: true})
+		if !q.waitForStoppedAndReleased(ctx, target) {
 			return stopped, QuiescenceError{Code: "pm2-stop-unproven"}
 		}
-		stopped.Evidence = append(stopped.Evidence, PM2StoppedEvidence{PMID: target.PMID, OriginalPID: target.PID, Port: target.Port, StartTicks: target.StartTicks, StopVerified: true})
+		stopped.Evidence[len(stopped.Evidence)-1].StopVerified = true
 		pending = pending[1:]
 	}
 	if final, err := q.snapshot(ctx); err != nil || !stoppedAndReleased(final, stopped.Processes...) {
@@ -347,7 +353,7 @@ func acknowledgedRecoveryTargets(stopped PM2Quiescence) ([]PM2ProcessIdentity, b
 	seen := make(map[int64]bool, len(stopped.Evidence))
 	for _, evidence := range stopped.Evidence {
 		identity, ok := byID[evidence.PMID]
-		if !ok || seen[evidence.PMID] || !evidence.StopVerified || identity.PID != evidence.OriginalPID || identity.Port != evidence.Port || identity.StartTicks != evidence.StartTicks {
+		if !ok || seen[evidence.PMID] || (!evidence.StopCommandSucceeded && !evidence.StopVerified) || identity.PID != evidence.OriginalPID || identity.Port != evidence.Port || identity.StartTicks != evidence.StartTicks {
 			return nil, false
 		}
 		seen[evidence.PMID] = true
@@ -395,6 +401,31 @@ func (q PM2Quiescer) snapshot(ctx context.Context) (PM2Snapshot, error) {
 		return PM2Snapshot{}, errors.New("pm2 quiescer is unavailable")
 	}
 	return q.Snapshots.Snapshot(ctx)
+}
+func (q PM2Quiescer) waitForStoppedAndReleased(ctx context.Context, target PM2ProcessIdentity) bool {
+	timeout := q.StopProofTimeout
+	if timeout <= 0 {
+		timeout = defaultPM2StopProofTimeout
+	}
+	interval := q.StopProofInterval
+	if interval <= 0 {
+		interval = defaultPM2StopProofInterval
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		after, err := q.snapshot(proofCtx)
+		if err == nil && proofCtx.Err() == nil && stoppedAndReleased(after, target) {
+			return true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-proofCtx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
 }
 func sameIdentities(current, expected []PM2ProcessIdentity) bool {
 	if len(current) != len(expected) {
