@@ -91,6 +91,11 @@ const (
 	BackupFailureEngineUnavailable
 	BackupFailureResolvedConfigInvalid
 	BackupFailureLegacyContainerInvalid
+	BackupFailureLegacyContainerImageUntrusted
+	BackupFailureLegacyContainerIdentityMismatch
+	BackupFailureLegacyContainerEndpointMismatch
+	BackupFailureLegacyContainerUnsafe
+	BackupFailureLegacyContainerAmbiguous
 	BackupFailureCancelled
 	BackupFailureDestination
 	BackupFailureCredentials
@@ -106,7 +111,7 @@ const (
 )
 
 func (c BackupFailureCode) String() string {
-	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
+	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-legacy-container-image-untrusted", "backup-legacy-container-identity-mismatch", "backup-legacy-container-endpoint-mismatch", "backup-legacy-container-unsafe", "backup-legacy-container-ambiguous", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
 	if int(c) >= len(codes) || c == BackupFailureNone {
 		return "backup-failed"
 	}
@@ -233,6 +238,16 @@ func BackupPreflightFailureResult(err error) BackupResult {
 		code = BackupFailureEngineUnavailable
 	case errors.Is(err, ErrResolvedConfigInvalid):
 		code = BackupFailureResolvedConfigInvalid
+	case errors.Is(err, ErrNoExactImageCandidate):
+		code = BackupFailureLegacyContainerImageUntrusted
+	case errors.Is(err, ErrContainerIdentity):
+		code = BackupFailureLegacyContainerIdentityMismatch
+	case errors.Is(err, ErrContainerEndpoint):
+		code = BackupFailureLegacyContainerEndpointMismatch
+	case errors.Is(err, ErrContainerUnsafeState):
+		code = BackupFailureLegacyContainerUnsafe
+	case errors.Is(err, ErrAmbiguousContainer):
+		code = BackupFailureLegacyContainerAmbiguous
 	case errors.Is(err, ErrLegacyContainerInvalid):
 		code = BackupFailureLegacyContainerInvalid
 	case errors.Is(err, ErrDestinationUnsafe), errors.Is(err, ErrDestinationSpace), errors.Is(err, ErrDestinationLocked), errors.Is(err, ErrDestinationFailure):
@@ -285,7 +300,10 @@ func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (Bac
 		return BackupPlan{}, ErrBackupPrecondition
 	}
 	container, err := a.Inspector.Discover(ctx, config)
-	if err != nil || container.Image != PostgreSQL11Image || !fullContainerID.MatchString(container.ID) {
+	if err != nil {
+		return BackupPlan{}, fmt.Errorf("%w: %w", ErrLegacyContainerInvalid, err)
+	}
+	if container.Image != PostgreSQL11Image || !fullContainerID.MatchString(container.ID) {
 		return BackupPlan{}, ErrLegacyContainerInvalid
 	}
 	if err := ctx.Err(); err != nil {

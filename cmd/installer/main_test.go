@@ -384,6 +384,21 @@ func TestRun_VersionFlag(t *testing.T) {
 	}
 }
 
+func TestInjectedVersionIsSharedByCLIAndProductionTUI(t *testing.T) {
+	previous := version
+	version = "v9.8.7-test"
+	t.Cleanup(func() { version = previous })
+
+	var out bytes.Buffer
+	if code := runWithoutStaleDockerGroup([]string{"--version"}, &out, &bytes.Buffer{}, nil); code != 0 {
+		t.Fatalf("version exit code = %d", code)
+	}
+	deps := buildDependencies(context.Background(), flags{}, false)
+	if !strings.Contains(out.String(), version) || deps.Version != version {
+		t.Fatalf("CLI/TUI versions = %q/%q, want %q", out.String(), deps.Version, version)
+	}
+}
+
 func TestRun_HelpFlag(t *testing.T) {
 	var out bytes.Buffer
 	var errOut bytes.Buffer

@@ -47,6 +47,46 @@ func TestDiscoverContainerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCanonicalPostgreSQL11ImageAcceptsOnlyTrustedDockerHubSpellings(t *testing.T) {
+	accepted := []string{
+		"bitnami/postgresql:11-debian-10",
+		"docker.io/bitnami/postgresql:11-debian-10",
+	}
+	for _, reference := range accepted {
+		t.Run("accept "+reference, func(t *testing.T) {
+			got, ok := canonicalPostgreSQL11Image(reference)
+			if !ok || got != PostgreSQL11Image {
+				t.Fatalf("canonicalPostgreSQL11Image(%q) = %q, %t", reference, got, ok)
+			}
+		})
+	}
+
+	rejected := []string{
+		"docker.io/library/bitnami/postgresql:11-debian-10",
+		"registry.example/bitnami/postgresql:11-debian-10",
+		"docker.io/other/postgresql:11-debian-10",
+		"docker.io/bitnami/postgresql:12-debian-10",
+		"docker.io/bitnami/postgresql@sha256:" + strings.Repeat("a", 64),
+		"docker.io/bitnami/postgresql",
+		"docker.io/bitnami/postgresql:latest",
+		"docker.io/bitnami/postgresql-lookalike:11-debian-10",
+		"Docker.io/bitnami/postgresql:11-debian-10",
+		"docker.io/Bitnami/postgresql:11-debian-10",
+		" docker.io/bitnami/postgresql:11-debian-10",
+		"docker.io/bitnami/postgresql:11-debian-10 ",
+		"docker.io//bitnami/postgresql:11-debian-10",
+		"docker.io/bitnami/postgresql::11-debian-10",
+		"",
+	}
+	for _, reference := range rejected {
+		t.Run("reject "+reference, func(t *testing.T) {
+			if got, ok := canonicalPostgreSQL11Image(reference); ok || got != "" {
+				t.Fatalf("canonicalPostgreSQL11Image(%q) = %q, %t", reference, got, ok)
+			}
+		})
+	}
+}
+
 func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *testing.T) {
 	config := ResolvedConfig{Host: "postgres", Port: 5432, Database: "alice", Username: "guardian"}
 	validID, unrelatedID := strings.Repeat("a", 64), strings.Repeat("b", 64)
@@ -74,7 +114,7 @@ func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *test
 			return d
 		}()}, validID, nil},
 		{"unknown declared health is rejected", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails { d := valid; d.Health = HealthUnknown; return d }()}, "", ErrContainerPrecondition},
-		{"image alias is not exact normalized identity", []ContainerSummary{{ID: validID, Image: "docker.io/bitnami/postgresql:11-debian-10"}}, map[string]ContainerDetails{validID: valid}, "", ErrContainerPrecondition},
+		{"trusted explicit Docker Hub image is canonicalized", []ContainerSummary{{ID: validID, Image: "docker.io/bitnami/postgresql:11-debian-10"}}, map[string]ContainerDetails{validID: valid}, validID, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			inspector := &fakeInspector{candidates: tt.candidates, details: tt.details}
@@ -253,6 +293,26 @@ func TestDockerCLIInspectorParsesOnlyAllowlistedMetadata(t *testing.T) {
 	if len(runner.calls) != 2 || runner.calls[0] != "docker ps --all --no-trunc --format {{.ID}}\t{{.Image}}" || runner.calls[1] != "docker inspect "+id {
 		t.Fatalf("calls = %v", runner.calls)
 	}
+}
+
+func TestDockerCLIInspectorSelectsRealMasterPortCaseAmongUnrelatedPostgreSQLContainers(t *testing.T) {
+	masterID := strings.Repeat("a", 64)
+	otherID := strings.Repeat("b", 64)
+	list := strings.Join([]string{
+		masterID + "\tdocker.io/bitnami/postgresql:11-debian-10",
+		otherID + "\tpostgres:11",
+	}, "\n") + "\n"
+	inspect := `[{"Id":"` + masterID + `","Config":{"Image":"docker.io/bitnami/postgresql:11-debian-10","Env":["POSTGRESQL_DATABASE=alice_guardian","POSTGRESQL_USERNAME=postgres"],"Labels":{"com.docker.compose.service":"postgresql-master"}},"State":{"Running":true,"Health":{"Status":"healthy"}},"Mounts":[{"Name":"postgresql-master-data","Destination":"/bitnami/postgresql"}],"NetworkSettings":{"Ports":{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5435"},{"HostIp":"::","HostPort":"5435"}]}}}]`
+	inspector := DockerCLIInspector{Runner: &fakeDockerRunner{outputs: [][]byte{[]byte(list), []byte(inspect)}}}
+
+	identity, err := DiscoverContainer(context.Background(), inspector, ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice_guardian", Username: "postgres"})
+	if err != nil {
+		t.Fatalf("DiscoverContainer() error = %v", err)
+	}
+	if identity.ID != masterID || identity.Image != PostgreSQL11Image {
+		t.Fatalf("identity = %#v", identity)
+	}
+	assertNoDockerLeak(t, identity, err)
 }
 
 func TestDockerCLIInspectorNormalizesPublishedBindings(t *testing.T) {

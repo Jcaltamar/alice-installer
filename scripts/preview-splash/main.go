@@ -12,6 +12,6 @@ import (
 )
 
 func main() {
-	s := tui.NewSplashModel(theme.Default())
+	s := tui.NewSplashModel(theme.Default(), "dev")
 	fmt.Println(s.View())
 }

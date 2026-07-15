@@ -198,6 +198,11 @@ func TestBackupPreconditionDiagnosticsIdentifyInternalFailure(t *testing.T) {
 		{name: "engine unavailable", err: ErrBackupEngineUnavailable, code: BackupFailureEngineUnavailable},
 		{name: "resolved config invalid", err: ErrResolvedConfigInvalid, code: BackupFailureResolvedConfigInvalid},
 		{name: "legacy container invalid", err: ErrLegacyContainerInvalid, code: BackupFailureLegacyContainerInvalid},
+		{name: "no trusted image", err: classifiedContainerError(ErrNoExactImageCandidate), code: BackupFailureLegacyContainerImageUntrusted},
+		{name: "identity mismatch", err: classifiedContainerError(ErrContainerIdentity), code: BackupFailureLegacyContainerIdentityMismatch},
+		{name: "endpoint mismatch", err: classifiedContainerError(ErrContainerEndpoint), code: BackupFailureLegacyContainerEndpointMismatch},
+		{name: "unsafe state", err: classifiedContainerError(ErrContainerUnsafeState), code: BackupFailureLegacyContainerUnsafe},
+		{name: "ambiguous", err: ErrAmbiguousContainer, code: BackupFailureLegacyContainerAmbiguous},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			result := BackupPreflightFailureResult(tt.err)
@@ -219,6 +224,7 @@ func TestBackupPreflightClassifiesInternalConsistencyFailures(t *testing.T) {
 		{name: "engine unavailable", action: BackupAction{}, want: ErrBackupEngineUnavailable},
 		{name: "resolved config invalid", action: BackupAction{Resolver: staticBackupResolver{}, Inspector: staticBackupInspector{identity: validContainer}, Store: OSDestinationStore{}}, want: ErrResolvedConfigInvalid},
 		{name: "legacy container invalid", action: BackupAction{Resolver: staticBackupResolver{config: validConfig}, Inspector: staticBackupInspector{}, Store: OSDestinationStore{}}, want: ErrLegacyContainerInvalid},
+		{name: "selector cause preserved", action: BackupAction{Resolver: staticBackupResolver{config: validConfig}, Inspector: staticBackupInspector{err: classifiedContainerError(ErrContainerEndpoint)}, Store: OSDestinationStore{}}, want: ErrContainerEndpoint},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := tt.action.Preflight(context.Background(), BackupRequest{Destination: t.TempDir()})
@@ -411,7 +417,10 @@ func (r staticBackupResolver) Resolve(context.Context, ConfigRequest) (ResolvedC
 	return r.config, nil
 }
 
-type staticBackupInspector struct{ identity ContainerIdentity }
+type staticBackupInspector struct {
+	identity ContainerIdentity
+	err      error
+}
 
 func (i staticBackupInspector) Candidates(context.Context, ImageIdentity) ([]ContainerSummary, error) {
 	return nil, nil
@@ -420,7 +429,7 @@ func (i staticBackupInspector) Inspect(context.Context, string) (ContainerDetail
 	return ContainerDetails{}, errors.New("not used")
 }
 func (i staticBackupInspector) Discover(context.Context, ResolvedConfig) (ContainerIdentity, error) {
-	return i.identity, nil
+	return i.identity, i.err
 }
 
 func TestBackupPlanReviewIsRedactedAndImmutable(t *testing.T) {

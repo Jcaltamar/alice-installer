@@ -80,9 +80,17 @@ func init() {
 
 // TestGoldenSplash snapshots the splash screen with the default theme.
 func TestGoldenSplash(t *testing.T) {
-	m := NewSplashModel(theme.Default())
+	m := NewSplashModel(theme.Default(), "dev")
 	view := m.View()
 	goldenAssert(t, "splash", view)
+}
+
+func TestSplashUsesInjectedVersion(t *testing.T) {
+	const injected = "v9.8.7-test"
+	view := NewSplashModel(theme.Default(), injected).View()
+	if !strings.Contains(view, "Installer "+injected) || strings.Contains(view, "v0.1.0") {
+		t.Fatalf("splash version was not injected: %q", view)
+	}
 }
 
 // TestGoldenPreflightBlocked snapshots the preflight screen after a result

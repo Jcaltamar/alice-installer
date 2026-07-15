@@ -112,6 +112,39 @@ func TestMigrationFailuresAndCancellationStayBlocked(t *testing.T) {
 	}
 }
 
+func TestMigrationPreflightRendersSelectorSpecificSafeCodes(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"no trusted image", migration.ErrNoExactImageCandidate, "backup-legacy-container-image-untrusted"},
+		{"identity mismatch", migration.ErrContainerIdentity, "backup-legacy-container-identity-mismatch"},
+		{"endpoint mismatch", migration.ErrContainerEndpoint, "backup-legacy-container-endpoint-mismatch"},
+		{"unsafe state", migration.ErrContainerUnsafeState, "backup-legacy-container-unsafe"},
+		{"ambiguity", migration.ErrAmbiguousContainer, "backup-legacy-container-ambiguous"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(buildTestDeps())
+			m.state = StateBackupPreflight
+			updated, _ := m.Update(BackupPreflightCompletedMsg{Err: tt.err})
+			m = updated.(Model)
+			if m.state != StateBackupResult || m.backupResult.FailureCode.String() != tt.code {
+				t.Fatalf("state/code = %v/%q", m.state, m.backupResult.FailureCode.String())
+			}
+			view := m.View()
+			if !strings.Contains(view, tt.code) {
+				t.Fatalf("view missing safe code %q: %q", tt.code, view)
+			}
+			for _, forbidden := range []string{"postgres_postgresql-master_1", strings.Repeat("a", 64), "docker.io/bitnami"} {
+				if strings.Contains(view, forbidden) {
+					t.Fatalf("view leaked %q: %q", forbidden, view)
+				}
+			}
+		})
+	}
+}
+
 func TestMigrationBackupResultRendersBoundedStageDiagnostics(t *testing.T) {
 	stages := []migration.BackupStageResult{
 		{Stage: migration.BackupStagePreconditions, Status: migration.BackupStagePassed},
