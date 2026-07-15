@@ -179,6 +179,35 @@ func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
 		t.Fatalf("stopped = %#v, err = %v", stopped, err)
 	}
 }
+func TestPM2QuiescerWaitsForDelayedPortRelease(t *testing.T) {
+	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 9}}}
+	lingering := PM2Snapshot{Records: append([]PM2Record(nil), before.Records...), Sockets: before.Sockets, Proc: before.Proc}
+	lingering.Records[0].Status = "stopped"
+	released := PM2Snapshot{Records: append([]PM2Record(nil), lingering.Records...), Proc: before.Proc}
+	runner := &recoveryRunner{}
+
+	stopped, err := (PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{before, before, lingering, released, released}}, Controller: PM2Controller{Runner: runner}, StopProofTimeout: 50 * time.Millisecond, StopProofInterval: time.Millisecond}).Quiesce(context.Background())
+	if err != nil || len(stopped.Evidence) != 1 || !stopped.Evidence[0].StopVerified {
+		t.Fatalf("stopped = %#v, err = %v", stopped, err)
+	}
+}
+func TestPM2QuiescerRecoversExactTargetAfterStopProofTimeout(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 1, Name: "front-guardian", PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 9}
+	before := recoverySnapshot(target, "online", target.PID, target.StartTicks)
+	lingering := recoverySnapshot(target, "stopped", target.PID, target.StartTicks)
+	lingering.Sockets = []SocketOwner{{PID: target.PID, Port: target.Port}}
+	runner := &recoveryRunner{}
+	q := PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{before, before, lingering, recoverySnapshot(target, "stopped", target.PID, target.StartTicks), recoverySnapshot(target, "online", 111, 90)}}, Controller: PM2Controller{Runner: runner}, StopProofTimeout: time.Millisecond, StopProofInterval: 10 * time.Millisecond}
+
+	stopped, err := q.Quiesce(context.Background())
+	if errorText(err) != "pm2-stop-unproven" || len(stopped.Evidence) != 1 || stopped.Evidence[0].StopVerified {
+		t.Fatalf("stopped = %#v, err = %v", stopped, err)
+	}
+	recovery, err := q.Recover(context.Background(), stopped)
+	if err != nil || !recovery.Verified || recovery.Recovered != 1 || strings.Join(runner.commands, ",") != "stop:1,start:1" {
+		t.Fatalf("recovery = %#v, commands = %#v, err = %v", recovery, runner.commands, err)
+	}
+}
 func TestPM2QuiescerRecoverUsesOnlyAcknowledgedIdentitiesInReverseStopOrder(t *testing.T) {
 	first, second := PM2ProcessIdentity{PMID: 0, PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 10}, PM2ProcessIdentity{PMID: 2, PID: 22, CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", RuntimeExecPath: "/usr/local/bin/node", Port: 9090, StartTicks: 20}
 	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{first, second}, Evidence: []PM2StoppedEvidence{{PMID: 0, OriginalPID: 11, Port: 8080, StartTicks: 10, StopVerified: true}, {PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
