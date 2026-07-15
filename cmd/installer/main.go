@@ -179,18 +179,19 @@ type depsFactoryFunc func(ctx context.Context, f flags) tui.Dependencies
 
 // defaultPorts contains the TCP port assignments written to the environment.
 var defaultPorts = map[string]int{
-	"POSTGRES_PORT":       5432,
-	"BACKEND_PORT":        9090,
-	"WEBSOCKET_PORT":      4550,
-	"WEB_PORT":            8080,
-	ports.RTSPPortKey:     8554,
-	"REDIS_PORT":          6379,
-	ports.HLSPortKey:      8888,
-	ports.WebRTCSignalKey: 8889,
-	ports.RTMPPortKey:     1935,
-	"MILVUS_PORT":         19530,
-	"MINIO_API_PORT":      9000,
-	"MINIO_CONSOLE_PORT":  9001,
+	"POSTGRES_PORT":        5432,
+	"BACKEND_PORT":         9090,
+	"WEBSOCKET_PORT":       4550,
+	"WEB_PORT":             8080,
+	ports.RTSPPortKey:      8554,
+	"REDIS_PORT":           6379,
+	ports.HLSPortKey:       8888,
+	ports.WebRTCSignalKey:  8889,
+	ports.RTMPPortKey:      1935,
+	ports.MilvusPortKey:    19530,
+	ports.MilvusWebPortKey: 9091,
+	"MINIO_API_PORT":       9000,
+	"MINIO_CONSOLE_PORT":   9001,
 }
 
 var defaultUDPPorts = map[string]int{

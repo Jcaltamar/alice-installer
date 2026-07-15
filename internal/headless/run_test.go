@@ -122,6 +122,7 @@ HLS_PORT2=8889
 HLS_PORT3=8890
 RTMP_PORT=1935
 MILVUS_PORT=19530
+MILVUS_WEB_PORT=9091
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
 `)
@@ -174,7 +175,7 @@ func happyDeps(t *testing.T) (headless.Dependencies, headless.Config) {
 		WorkspaceDir:         dir,
 		MediaDir:             "/opt/media",
 		ConfigDir:            "/opt/config",
-		RequiredTCPPorts:     map[string]int{"POSTGRES_PORT": 5432},
+		RequiredTCPPorts:     map[string]int{"POSTGRES_PORT": 5432, "MILVUS_PORT": 19530, "MILVUS_WEB_PORT": 9091},
 		CmdExecutor:          newFakeCmdExecutor(),
 	}
 	return deps, cfg
@@ -224,6 +225,11 @@ func TestHeadlessRun_HappyPath(t *testing.T) {
 	fw := deps.Writer.(*envgen.FakeWriter)
 	if _, ok := fw.Written[envPath]; !ok {
 		t.Errorf(".env was not written to FakeWriter; keys: %v", mapKeys(fw.Written))
+	}
+	for _, line := range []string{"MILVUS_PORT=19530", "MILVUS_WEB_PORT=9091"} {
+		if !strings.Contains(string(fw.Written[envPath]), line+"\n") {
+			t.Errorf("rendered .env missing %q", line)
+		}
 	}
 }
 

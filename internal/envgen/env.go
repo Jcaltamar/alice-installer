@@ -25,6 +25,7 @@ type PortsConfig struct {
 	WebRTCICEPort    int
 	RTMPPort         int
 	MilvusPort       int
+	MilvusWebPort    int
 	MinioAPIPort     int
 	MinioConsolePort int
 }
@@ -148,6 +149,7 @@ func (t *Templater) Render(template []byte, in Input) ([]byte, error) {
 	subs["WEBRTC_ICE_PORT"] = fmt.Sprintf("%d", p.WebRTCICEPort)
 	subs["RTMP_PORT"] = fmt.Sprintf("%d", p.RTMPPort)
 	subs["MILVUS_PORT"] = fmt.Sprintf("%d", p.MilvusPort)
+	subs["MILVUS_WEB_PORT"] = fmt.Sprintf("%d", p.MilvusWebPort)
 	subs["MINIO_API_PORT"] = fmt.Sprintf("%d", p.MinioAPIPort)
 	subs["MINIO_CONSOLE_PORT"] = fmt.Sprintf("%d", p.MinioConsolePort)
 	for key, value := range asteriskEnvValues(in.Asterisk) {

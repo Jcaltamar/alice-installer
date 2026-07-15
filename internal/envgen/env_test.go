@@ -41,6 +41,7 @@ func defaultInput() envgen.Input {
 			WebRTCICEPort:    8189,
 			RTMPPort:         1935,
 			MilvusPort:       19530,
+			MilvusWebPort:    9091,
 			MinioAPIPort:     9000,
 			MinioConsolePort: 9001,
 		},
@@ -347,6 +348,7 @@ func TestTemplater_Render_PortSubstitution(t *testing.T) {
 		HLSPort3:         18890,
 		RTMPPort:         11935,
 		MilvusPort:       19531,
+		MilvusWebPort:    19091,
 		MinioAPIPort:     19000,
 		MinioConsolePort: 19001,
 	}
@@ -368,6 +370,7 @@ func TestTemplater_Render_PortSubstitution(t *testing.T) {
 	assertKeyValue(t, s, "HLS_PORT3", "18890")
 	assertKeyValue(t, s, "RTMP_PORT", "11935")
 	assertKeyValue(t, s, "MILVUS_PORT", "19531")
+	assertKeyValue(t, s, "MILVUS_WEB_PORT", "19091")
 	assertKeyValue(t, s, "MINIO_API_PORT", "19000")
 	assertKeyValue(t, s, "MINIO_CONSOLE_PORT", "19001")
 }

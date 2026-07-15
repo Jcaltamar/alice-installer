@@ -18,6 +18,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/migration"
 	"github.com/jcaltamar/alice-installer/internal/platform"
+	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/restart"
 	"github.com/jcaltamar/alice-installer/internal/tui"
 	"github.com/jcaltamar/alice-installer/internal/update"
@@ -140,6 +141,22 @@ func TestDefaultMediaMTXPortsUseCorrectProtocols(t *testing.T) {
 	for key, want := range map[string]int{"HLS_PORT3": 8890, "WEBRTC_ICE_PORT": 8189} {
 		if got := defaultUDPPorts[key]; got != want {
 			t.Errorf("default UDP %s = %d, want %d", key, got, want)
+		}
+	}
+}
+
+func TestDefaultMilvusPorts(t *testing.T) {
+	for key, want := range map[string]int{ports.MilvusPortKey: 19530, ports.MilvusWebPortKey: 9091} {
+		if got := defaultPorts[key]; got != want {
+			t.Errorf("default TCP %s = %d, want %d", key, got, want)
+		}
+	}
+}
+
+func TestDefaultMinioPorts(t *testing.T) {
+	for key, want := range map[string]int{ports.MinioAPIPortKey: 9000, ports.MinioConsoleKey: 9001} {
+		if got := defaultPorts[key]; got != want {
+			t.Errorf("default TCP %s = %d, want %d", key, got, want)
 		}
 	}
 }

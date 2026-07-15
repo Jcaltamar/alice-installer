@@ -68,26 +68,28 @@ func TestPortScanOneConflictBuildsConflictList(t *testing.T) {
 	}
 }
 
-func TestPortScanMigrationRTSPExemptionsRetainFinalPlan(t *testing.T) {
+func TestPortScanMigrationExemptionsRetainFinalPlan(t *testing.T) {
 	tcp := map[string]int{
 		"REDIS_PORT":      6379,
 		ports.RTSPPortKey: 8554, ports.RTMPPortKey: 1935,
 		ports.HLSPortKey: 8888, ports.WebRTCSignalKey: 8889,
+		ports.MilvusPortKey: 19530, ports.MilvusWebPortKey: 9091,
+		ports.MinioAPIPortKey: 9000, ports.MinioConsoleKey: 9001,
 		"BACKEND_PORT": 9090,
 	}
 	udp := map[string]int{ports.SRTPortKey: 8890, ports.WebRTCICEPortKey: 8189}
 	scanner := &ports.FakePortScanner{
-		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889},
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889, 19530, 9091, 9000, 9001},
 		OccupiedUDPPorts: []int{8890, 8189},
 	}
 	m := NewPortScanModel(theme.Default(), scanner, tcp, udp)
 
 	normal := m.scanAll()
-	if len(normal.Conflicts) != 7 {
-		t.Fatalf("normal conflicts = %v, want Redis and all six RTSP ports", normal.Conflicts)
+	if len(normal.Conflicts) != 11 {
+		t.Fatalf("normal conflicts = %v, want Redis, Milvus, MinIO, and all six RTSP ports", normal.Conflicts)
 	}
 
-	exemptTCP, exemptUDP := ports.MigrationRTSPExemptions()
+	exemptTCP, exemptUDP := ports.MigrationPortExemptions()
 	m.setExemptPorts(exemptTCP, exemptUDP)
 	migration := m.scanAll()
 	if len(migration.Conflicts) != 0 {
@@ -97,17 +99,26 @@ func TestPortScanMigrationRTSPExemptionsRetainFinalPlan(t *testing.T) {
 		"REDIS_PORT":      6379,
 		ports.RTSPPortKey: 8554, ports.RTMPPortKey: 1935,
 		ports.HLSPortKey: 8888, ports.WebRTCSignalKey: 8889,
+		ports.MilvusPortKey: 19530, ports.MilvusWebPortKey: 9091,
+		ports.MinioAPIPortKey: 9000, ports.MinioConsoleKey: 9001,
 		ports.SRTPortKey: 8890, ports.WebRTCICEPortKey: 8189,
 	} {
 		if got := migration.FreePlan[key]; got != want {
 			t.Errorf("final plan %s = %d, want %d", key, got, want)
 		}
 	}
+	configured := portsConfigFromMap(migration.FreePlan)
+	if configured.MilvusPort != 19530 || configured.MilvusWebPort != 9091 {
+		t.Fatalf("typed Milvus plan = %d/%d, want 19530/9091", configured.MilvusPort, configured.MilvusWebPort)
+	}
+	if configured.MinioAPIPort != 9000 || configured.MinioConsolePort != 9001 {
+		t.Fatalf("typed MinIO plan = %d/%d, want 9000/9001", configured.MinioAPIPort, configured.MinioConsolePort)
+	}
 
 	scanner.OccupiedTCPPorts = append(scanner.OccupiedTCPPorts, 9090)
 	migration = m.scanAll()
 	if len(migration.Conflicts) != 1 || migration.Conflicts[0].Key != "BACKEND_PORT" {
-		t.Fatalf("non-RTSP migration conflicts = %v, want BACKEND_PORT", migration.Conflicts)
+		t.Fatalf("non-exempt migration conflicts = %v, want BACKEND_PORT", migration.Conflicts)
 	}
 }
 
