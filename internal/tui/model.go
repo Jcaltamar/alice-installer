@@ -154,7 +154,7 @@ type Model struct {
 	restoreResult         migration.RestoreResult
 	migrationLease        *migration.PreInstallMigrationLease
 	migrationRecoveryCode string
-	migrationDiagnostic   string
+	migrationDiagnostic   *installation.PM2ObservationDiagnostic
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string

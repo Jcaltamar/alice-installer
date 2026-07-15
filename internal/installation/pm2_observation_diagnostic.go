@@ -24,10 +24,10 @@ type PM2ObservationDiagnostic struct {
 
 func (d PM2ObservationDiagnostic) String() string {
 	if d.StopProofTimedOut {
-		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof timed out waiting for PM2 status stopped and port release on %d", d.PMID, d.Port)
+		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof timed out: deadline elapsed waiting for exact PM2 record status stopped and target port release on %d", d.PMID, d.Port)
 	}
 	if d.StopProofCancelled {
-		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof was cancelled before PM2 status stopped and port release on %d were proven", d.PMID, d.Port)
+		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof was cancelled before exact PM2 record status stopped and target port %d release were proven", d.PMID, d.Port)
 	}
 	parts := make([]string, 0, 5)
 	for _, part := range []struct{ key, value string }{

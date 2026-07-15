@@ -3,8 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/migration"
@@ -125,12 +128,13 @@ func boundedQuiescenceCode(err error) string {
 	return "pm2-quiescence-unavailable"
 }
 
-func boundedQuiescenceDiagnostic(err error) string {
+func boundedQuiescenceDiagnostic(err error) *installation.PM2ObservationDiagnostic {
 	var failure installation.QuiescenceError
 	if !errors.As(err, &failure) || failure.Diagnostic == nil || failure.Code != "pm2-observation-unavailable" && failure.Code != "pm2-stop-unproven" {
-		return ""
+		return nil
 	}
-	return failure.Diagnostic.String()
+	diagnostic := *failure.Diagnostic
+	return &diagnostic
 }
 
 func (m Model) migrationQuiescenceView() string {
@@ -142,12 +146,31 @@ func (m Model) migrationRecoveryView() string {
 }
 
 func (m Model) migrationTerminalView() string {
-	message := "Migration did not complete. The installer did not report installation success. Recovery status: " + m.migrationRecoveryCode + "."
-	if m.migrationDiagnostic != "" {
-		message += " Observation diagnostic: " + m.migrationDiagnostic + "."
+	var message strings.Builder
+	message.WriteString("Migration did not complete.\n")
+	message.WriteString("The installer did not report installation success.\n")
+	message.WriteString("Recovery status: " + m.migrationRecoveryCode + "\n")
+	if diagnostic := m.migrationDiagnostic; diagnostic != nil {
+		stage, operation, command, cause := diagnostic.Stage, diagnostic.Operation, diagnostic.Command, diagnostic.Cause
+		if diagnostic.StopProofTimedOut || diagnostic.StopProofCancelled {
+			stage = "stop-proof"
+			operation = "stopped-and-released"
+			command = fmt.Sprintf("sudo -n pm2 stop %d", diagnostic.PMID)
+			cause = diagnostic.String()
+		}
+		message.WriteString("\nDebug:\n")
+		for _, field := range []struct{ label, value string }{{"Stage", stage}, {"Operation", operation}, {"Command", command}, {"Cause", cause}} {
+			if field.value != "" {
+				message.WriteString(field.label + ": " + field.value + "\n")
+			}
+		}
 	}
 	if m.migrationRecoveryCode == migration.DispositionManualRecoveryCode {
-		message += " The legacy container was removed and cannot be recreated automatically; use the preserved volumes and validated backup for bounded manual recovery."
+		message.WriteString("\nThe legacy container was removed and cannot be recreated automatically; use the preserved volumes and validated backup for bounded manual recovery.\n")
 	}
-	return m.deps.Theme.Danger.Render(message + "\n")
+	view := strings.TrimSuffix(message.String(), "\n")
+	if m.width > 0 {
+		view = lipgloss.NewStyle().Width(m.width).Render(view)
+	}
+	return m.deps.Theme.Danger.Render(view + "\n")
 }

@@ -15,7 +15,7 @@ const guardianRoot = "/opt/alice-guardian"
 const backendRoot = "/opt/backend_alice_guardian"
 const defaultPM2AcquisitionTimeout = 5 * time.Second
 const defaultPM2AcquisitionOutputLimit = 64 * 1024
-const defaultPM2StopProofTimeout = 2 * time.Second
+const defaultPM2StopProofTimeout = 10 * time.Second
 const defaultPM2StopProofInterval = 100 * time.Millisecond
 
 type PM2Record struct {
@@ -427,8 +427,15 @@ func (q PM2Quiescer) waitForStoppedAndReleased(ctx context.Context, target PM2Pr
 		if err == nil && proofCtx.Err() == nil && stoppedAndReleased(after, target) {
 			return nil
 		}
+		// A command interrupted by the proof deadline is evidence of the deadline,
+		// not a new observation failure. Genuine command and validation failures
+		// remain causal even if the deadline fires while their result is handled.
 		if err != nil && observationFailure == nil {
-			observationFailure = withObservationStage(err, "stop-proof-snapshot")
+			diagnostic := withObservationStage(err, "stop-proof-snapshot")
+			contextInterrupted := diagnostic.Cause == "timeout" || diagnostic.Cause == "cancelled" || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+			if proofCtx.Err() == nil || !contextInterrupted {
+				observationFailure = diagnostic
+			}
 		}
 		timer := time.NewTimer(interval)
 		select {

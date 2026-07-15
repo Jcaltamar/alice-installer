@@ -204,6 +204,52 @@ func TestPM2QuiescerWaitsForDelayedPortRelease(t *testing.T) {
 		t.Fatalf("stopped = %#v, err = %v", stopped, err)
 	}
 }
+
+func TestPM2QuiescerDefaultStopProofAllowsProductionShutdownLatency(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 1, Port: 8080}
+	lingering := PM2Snapshot{Records: []PM2Record{{ID: target.PMID, Status: "stopped"}}, Sockets: []SocketOwner{{PID: 11, Port: target.Port}}}
+	released := PM2Snapshot{Records: []PM2Record{{ID: target.PMID, Status: "stopped"}}}
+	provider := &delayedSnapshotProvider{delay: 2100 * time.Millisecond, before: lingering, after: released}
+
+	if diagnostic := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}}).waitForStoppedAndReleased(context.Background(), target); diagnostic != nil {
+		t.Fatalf("waitForStoppedAndReleased() diagnostic = %#v, want delayed convergence success", diagnostic)
+	}
+}
+
+func TestPM2QuiescerStopProofClassifiesDeadlineAndObservationFailures(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 1, Port: 8080}
+	lingering := PM2Snapshot{Records: []PM2Record{{ID: target.PMID, Status: "stopped"}}, Sockets: []SocketOwner{{PID: 11, Port: target.Port}}}
+
+	t.Run("deadline cancellation after successful observation is convergence timeout", func(t *testing.T) {
+		provider := &deadlineSnapshotProvider{first: lingering}
+		diagnostic := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: 20 * time.Millisecond, StopProofInterval: time.Millisecond}).waitForStoppedAndReleased(context.Background(), target)
+		if diagnostic == nil || !diagnostic.StopProofTimedOut || diagnostic.Operation != "" || diagnostic.Cause != "" {
+			t.Fatalf("diagnostic = %#v, want convergence timeout without command failure", diagnostic)
+		}
+	})
+
+	t.Run("genuine observation failure before deadline remains classified", func(t *testing.T) {
+		failure := observationCommandError(context.Background(), "pm2-jlist", "sudo -n pm2 jlist", nil, errors.New("exit status 2"))
+		provider := &snapshotSequence{items: []PM2Snapshot{{}}, errs: []error{failure}}
+		diagnostic := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: time.Millisecond, StopProofInterval: 10 * time.Millisecond}).waitForStoppedAndReleased(context.Background(), target)
+		if diagnostic == nil || diagnostic.Operation != "pm2-jlist" || diagnostic.Cause != "exit-2" || diagnostic.StopProofTimedOut {
+			t.Fatalf("diagnostic = %#v, want genuine pm2-jlist failure", diagnostic)
+		}
+	})
+}
+
+func TestPM2QuiescerStopProofHonorsParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	diagnostic := (PM2Quiescer{Snapshots: blockingSnapshotProvider{}, Controller: PM2Controller{Runner: &recoveryRunner{}}}).waitForStoppedAndReleased(ctx, PM2ProcessIdentity{PMID: 1, Port: 8080})
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("parent cancellation took %s, want responsive return", elapsed)
+	}
+	if diagnostic == nil || !diagnostic.StopProofCancelled || diagnostic.StopProofTimedOut || diagnostic.Operation != "" {
+		t.Fatalf("diagnostic = %#v, want parent cancellation", diagnostic)
+	}
+}
 func TestPM2QuiescerRecoversExactTargetAfterStopProofTimeout(t *testing.T) {
 	target := PM2ProcessIdentity{PMID: 1, Name: "front-guardian", PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 9}
 	before := recoverySnapshot(target, "online", target.PID, target.StartTicks)
@@ -344,6 +390,51 @@ type snapshotSequence struct {
 	items []PM2Snapshot
 	errs  []error
 	next  int
+}
+
+type delayedSnapshotProvider struct {
+	delay         time.Duration
+	before, after PM2Snapshot
+	started       time.Time
+}
+
+func (p *delayedSnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, error) {
+	if p.started.IsZero() {
+		p.started = time.Now()
+	}
+	remaining := p.delay - time.Since(p.started)
+	if remaining <= 0 {
+		return p.after, nil
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return p.after, nil
+	case <-ctx.Done():
+		return PM2Snapshot{}, observationCommandError(ctx, "pm2-jlist", "sudo -n pm2 jlist", nil, ctx.Err())
+	}
+}
+
+type deadlineSnapshotProvider struct {
+	first PM2Snapshot
+	calls int
+}
+
+func (p *deadlineSnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, error) {
+	p.calls++
+	if p.calls == 1 {
+		return p.first, nil
+	}
+	<-ctx.Done()
+	return PM2Snapshot{}, observationCommandError(ctx, "pm2-jlist", "sudo -n pm2 jlist", nil, ctx.Err())
+}
+
+type blockingSnapshotProvider struct{}
+
+func (blockingSnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, error) {
+	<-ctx.Done()
+	return PM2Snapshot{}, ctx.Err()
 }
 
 func (s *snapshotSequence) Snapshot(context.Context) (PM2Snapshot, error) {
