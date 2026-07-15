@@ -54,13 +54,16 @@ func TestCredentialTransportAndHelperDumpSpecKeepSecretOutsideObservableBoundary
 	if run.Spec.Name != "docker" || containsShell(run.Spec.Args) || containsSecret(fmt.Sprint(run, run.Spec)) {
 		t.Fatalf("unsafe helper spec: %#v", run)
 	}
-	assertArgsContainInOrder(t, run.Spec.Args,
-		"run", "--rm", "--pull=never", "--name", run.Name, "--label", HelperCleanupLabel+"=true", "--label", HelperOperationLabel+"="+run.OperationID,
-		"--network", "host", "--mount", "type=bind,src="+credential.HostPath()+",dst="+ContainerPGPassPath+",readonly",
-		"--env", "PGPASSFILE="+ContainerPGPassPath, string(PostgreSQL11Image),
-		"pg_dump", "--format=custom", "--file=-", "--no-password", "--host="+config.Host,
-		"--port=5432", "--username="+config.Username, "--dbname="+config.Database,
-	)
+	wantArgs := []string{
+		"run", "--rm", "--pull=never", "--name", run.Name, "--label", HelperCleanupLabel + "=true", "--label", HelperOperationLabel + "=" + run.OperationID,
+		"--network", "host", "--mount", "type=bind,src=" + credential.HostPath() + ",dst=" + ContainerPGPassPath + ",readonly",
+		"--env", "PGPASSFILE=" + ContainerPGPassPath, "--user", fmt.Sprintf("%d:%d", credential.ownerUID, credential.ownerGID), string(PostgreSQL11Image),
+		"pg_dump", "--format=custom", "--file=-", "--no-password", "--host=" + config.Host,
+		"--port=5432", "--username=" + config.Username, "--dbname=" + config.Database,
+	}
+	if !equalStrings(run.Spec.Args, wantArgs) {
+		t.Fatalf("helper args = %#v, want %#v", run.Spec.Args, wantArgs)
+	}
 	if got := run.CleanupSpec(); got.Name != "docker" || strings.Contains(fmt.Sprint(got), processSecretSentinel) || !equalStrings(got.Args, []string{"rm", "--force", run.Name}) {
 		t.Fatalf("cleanup spec = %#v", got)
 	}
@@ -89,6 +92,38 @@ func TestHelperDumpRejectsUnpinnedImageUnsafeMountAndInvalidInputs(t *testing.T)
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := BuildHelperDump(tt.request); err == nil || containsSecret(err.Error()) {
+				t.Fatalf("BuildHelperDump() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestHelperDumpRejectsCredentialOwnerIdentityMismatchAndMalformedIdentity(t *testing.T) {
+	config := testProcessConfig(processSecretSentinel)
+	credential, err := (CredentialTransport{TempRoot: t.TempDir()}).Prepare(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Cleanup()
+
+	cases := []struct {
+		name       string
+		credential CredentialFile
+	}{
+		{"owner UID does not match file", func() CredentialFile { changed := credential; changed.ownerUID++; return changed }()},
+		{"owner GID does not match file", func() CredentialFile { changed := credential; changed.ownerGID++; return changed }()},
+		{"negative owner UID", func() CredentialFile { changed := credential; changed.ownerUID = -1; return changed }()},
+		{"negative owner GID", func() CredentialFile { changed := credential; changed.ownerGID = -1; return changed }()},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildHelperDump(HelperDumpRequest{
+				GOOS:       "linux",
+				Container:  ContainerIdentity{ID: strings.Repeat("a", 64), Image: PostgreSQL11Image},
+				Config:     config,
+				Credential: tt.credential,
+			})
+			if !errors.Is(err, ErrProcessPrecondition) || containsSecret(fmt.Sprint(err)) {
 				t.Fatalf("BuildHelperDump() error = %v", err)
 			}
 		})

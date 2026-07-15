@@ -29,7 +29,10 @@ var ErrProcessPrecondition = errors.New("migration process precondition failed")
 
 type CredentialTransport struct{ TempRoot string }
 
-type CredentialFile struct{ hostPath, root string }
+type CredentialFile struct {
+	hostPath, root     string
+	ownerUID, ownerGID int
+}
 
 func (f CredentialFile) HostPath() string { return f.hostPath }
 func (f CredentialFile) Cleanup() error {
@@ -68,7 +71,17 @@ func (t CredentialTransport) Prepare(config ResolvedConfig) (CredentialFile, err
 		_ = os.RemoveAll(root)
 		return CredentialFile{}, ErrProcessPrecondition
 	}
-	return CredentialFile{hostPath: path, root: root}, nil
+	fileInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return CredentialFile{}, ErrProcessPrecondition
+	}
+	uid, gid, ok := numericOwner(fileInfo)
+	if !ok {
+		_ = os.RemoveAll(root)
+		return CredentialFile{}, ErrProcessPrecondition
+	}
+	return CredentialFile{hostPath: path, root: root, ownerUID: uid, ownerGID: gid}, nil
 }
 func pgpassField(value string) string {
 	return strings.NewReplacer("\\", "\\\\", ":", "\\:").Replace(value)
@@ -111,6 +124,7 @@ func BuildHelperDump(request HelperDumpRequest) (HelperRun, error) {
 		"run", "--rm", "--pull=never", "--name", name,
 		"--label", HelperCleanupLabel + "=true", "--label", HelperOperationLabel + "=" + id,
 		"--network", "host", "--mount", mount, "--env", "PGPASSFILE=" + ContainerPGPassPath,
+		"--user", fmt.Sprintf("%d:%d", request.Credential.ownerUID, request.Credential.ownerGID),
 		string(PostgreSQL11Image), "pg_dump", "--format=custom", "--file=-", "--no-password",
 		"--host=" + request.Config.Host, fmt.Sprintf("--port=%d", request.Config.Port), "--username=" + request.Config.Username, "--dbname=" + request.Config.Database,
 	}, Timeout: timeout}}, nil
@@ -119,15 +133,15 @@ func validConfig(c ResolvedConfig) bool {
 	return c.Dialect == DialectPostgreSQL && c.Host != "" && c.Port > 0 && c.Database != "" && c.Username != ""
 }
 func safeCredential(f CredentialFile) bool {
-	if f.root == "" || f.hostPath != filepath.Join(f.root, "pgpass") || !filepath.IsAbs(f.root) {
+	if f.root == "" || f.hostPath != filepath.Join(f.root, "pgpass") || !filepath.IsAbs(f.root) || f.ownerUID < 0 || f.ownerGID < 0 {
 		return false
 	}
 	dir, err := os.Lstat(f.root)
-	if err != nil || !dir.IsDir() || dir.Mode()&os.ModeSymlink != 0 || dir.Mode().Perm() != 0o700 {
+	if err != nil || !dir.IsDir() || dir.Mode()&os.ModeSymlink != 0 || dir.Mode().Perm() != 0o700 || !ownedBy(dir, f.ownerUID, f.ownerGID) {
 		return false
 	}
 	file, err := os.Lstat(f.hostPath)
-	return err == nil && file.Mode().IsRegular() && file.Mode()&os.ModeSymlink == 0 && file.Mode().Perm() == 0o600
+	return err == nil && file.Mode().IsRegular() && file.Mode()&os.ModeSymlink == 0 && file.Mode().Perm() == 0o600 && ownedBy(file, f.ownerUID, f.ownerGID)
 }
 func randomToken() (string, error) {
 	b := make([]byte, 12)

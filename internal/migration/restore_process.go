@@ -50,7 +50,17 @@ func PrepareTargetCredential(transport CredentialTransport, config workspace.Tar
 		_ = os.RemoveAll(root)
 		return CredentialFile{}, ErrReplacementPrecondition
 	}
-	return CredentialFile{hostPath: path, root: root}, nil
+	fileInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return CredentialFile{}, ErrReplacementPrecondition
+	}
+	uid, gid, ok := numericOwner(fileInfo)
+	if !ok {
+		_ = os.RemoveAll(root)
+		return CredentialFile{}, ErrReplacementPrecondition
+	}
+	return CredentialFile{hostPath: path, root: root, ownerUID: uid, ownerGID: gid}, nil
 }
 
 func BuildTargetBackupDump(config workspace.TargetDatabaseConfig, credential CredentialFile, operationID string) (ProcessSpec, error) {
