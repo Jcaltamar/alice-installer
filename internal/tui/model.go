@@ -188,6 +188,7 @@ func portsConfigFromMap(ports map[string]int) envgen.PortsConfig {
 		HLSPort:          ports["HLS_PORT"],
 		HLSPort2:         ports["HLS_PORT2"],
 		HLSPort3:         ports["HLS_PORT3"],
+		WebRTCICEPort:    ports["WEBRTC_ICE_PORT"],
 		RTMPPort:         ports["RTMP_PORT"],
 		MilvusPort:       ports["MILVUS_PORT"],
 		MinioAPIPort:     ports["MINIO_API_PORT"],
@@ -223,6 +224,17 @@ func NewModel(deps Dependencies) Model {
 		// envwrite, pull, deploy, verify, result are initialised lazily at each
 		// state transition so they receive the correct runtime data.
 	}
+}
+
+func (m *Model) applyMigrationPortPolicy() {
+	var exemptTCP, exemptUDP map[int]struct{}
+	if m.hasLiveMigrationLease() {
+		exemptTCP, exemptUDP = ports.MigrationRTSPExemptions()
+	}
+	m.deps.PreflightCoordinator.ExemptTCPPorts = exemptTCP
+	m.deps.PreflightCoordinator.ExemptUDPPorts = exemptUDP
+	m.preflight.coord = m.deps.PreflightCoordinator
+	m.portscan.setExemptPorts(exemptTCP, exemptUDP)
 }
 
 // Init implements tea.Model.
@@ -498,6 +510,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.migrationLease = msg.Lease
 		m.migrationPending = true
+		m.applyMigrationPortPolicy()
 		m.state = StatePreflight
 		return m, m.preflight.Init()
 
@@ -507,6 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.migrationLease = nil
 		m.migrationPending = false
+		m.applyMigrationPortPolicy()
 		m.migrationRecoveryCode = boundedRecoveryCode(msg.Recovery, msg.Err)
 		m.state = StateMigrationResult
 		return m, nil
@@ -517,6 +531,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.migrationLease = nil
 		m.migrationPending = false
+		m.applyMigrationPortPolicy()
 		if msg.Err != nil {
 			m.migrationRecoveryCode = "pm2-lease-completion-failed"
 			m.state = StateMigrationResult

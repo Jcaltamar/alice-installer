@@ -25,20 +25,27 @@ import (
 //   - After all conflicts resolved → emits PortsConfirmedMsg.
 //   - Ctrl+R → rescan all ports.
 type PortScanModel struct {
-	theme    theme.Theme
-	scanner  ports.PortScanner
-	required map[string]int // env key → default port (TCP)
-	udp      map[string]int // env key → default port (UDP)
-	result   *PortScanResultMsg
+	theme     theme.Theme
+	scanner   ports.PortScanner
+	required  map[string]int // env key → default port (TCP)
+	udp       map[string]int // env key → default port (UDP)
+	exemptTCP map[int]struct{}
+	exemptUDP map[int]struct{}
+	result    *PortScanResultMsg
 
 	// resolution state
-	resolving    bool
-	conflicts    []PortConflict // remaining unresolved conflicts
-	freePlan     map[string]int // resolved ports so far
-	currentKey   string
-	currentPort  int
-	input        textinput.Model
-	err          string
+	resolving   bool
+	conflicts   []PortConflict // remaining unresolved conflicts
+	freePlan    map[string]int // resolved ports so far
+	currentKey  string
+	currentPort int
+	input       textinput.Model
+	err         string
+}
+
+func (p *PortScanModel) setExemptPorts(tcp, udp map[int]struct{}) {
+	p.exemptTCP = tcp
+	p.exemptUDP = udp
 }
 
 // NewPortScanModel constructs a PortScanModel.
@@ -89,7 +96,8 @@ func (p PortScanModel) scanAll() PortScanResultMsg {
 
 	for _, k := range keys {
 		port := p.required[k]
-		if p.scanner.IsAvailable(ctx, port) {
+		_, exempt := p.exemptTCP[port]
+		if exempt || p.scanner.IsAvailable(ctx, port) {
 			freePlan[k] = port
 		} else {
 			conflicts = append(conflicts, PortConflict{Key: k, Requested: port, Reason: "occupied"})
@@ -105,7 +113,8 @@ func (p PortScanModel) scanAll() PortScanResultMsg {
 
 	for _, k := range udpKeys {
 		port := p.udp[k]
-		if p.scanner.IsUDPAvailable(ctx, port) {
+		_, exempt := p.exemptUDP[port]
+		if exempt || p.scanner.IsUDPAvailable(ctx, port) {
 			freePlan[k] = port
 		} else {
 			conflicts = append(conflicts, PortConflict{Key: k, Requested: port, Reason: "occupied"})
@@ -174,7 +183,11 @@ func (p PortScanModel) handleAlternatePort() (PortScanModel, tea.Cmd) {
 
 	// Check availability.
 	ctx := context.Background()
-	if !p.scanner.IsAvailable(ctx, port) {
+	available := p.scanner.IsAvailable(ctx, port)
+	if _, udp := p.udp[p.currentKey]; udp {
+		available = p.scanner.IsUDPAvailable(ctx, port)
+	}
+	if !available {
 		p.err = fmt.Sprintf("Port %d is also occupied. Try a different port.", port)
 		return p, nil
 	}

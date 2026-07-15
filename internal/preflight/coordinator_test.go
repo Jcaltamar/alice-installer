@@ -3,6 +3,7 @@ package preflight_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jcaltamar/alice-installer/internal/compose"
@@ -231,6 +232,37 @@ func TestCoordinator_PortsOccupied_Warn(t *testing.T) {
 	// Port conflict is a WARN, not a FAIL — user can choose alternate ports.
 	if !r.CanContinue() {
 		t.Errorf("CanContinue() = false, want true with only port WARN")
+	}
+}
+
+func TestCoordinator_MigrationRTSPPortExemptions(t *testing.T) {
+	t.Parallel()
+	tcpExempt, udpExempt := ports.MigrationRTSPExemptions()
+	c := happyCoordinator()
+	c.RequiredTCPPorts = []int{6379, 8554, 1935, 8888, 8889, 9090}
+	c.RequiredUDPPorts = []int{8890, 8189}
+	c.Ports = &ports.FakePortScanner{
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889},
+		OccupiedUDPPorts: []int{8890, 8189},
+	}
+	normal := findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
+	if normal.Status != preflight.StatusWarn || !strings.Contains(normal.Detail, "UDP 8890") || !strings.Contains(normal.Detail, "UDP 8189") {
+		t.Fatalf("normal RTSP conflicts = %v %q, want WARN with UDP protocol", normal.Status, normal.Detail)
+	}
+	c.ExemptTCPPorts, c.ExemptUDPPorts = tcpExempt, udpExempt
+
+	result := findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
+	if result.Status != preflight.StatusPass {
+		t.Fatalf("migration RTSP ports status = %v, want PASS: %s", result.Status, result.Detail)
+	}
+
+	c.Ports = &ports.FakePortScanner{
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889, 9090},
+		OccupiedUDPPorts: []int{8890, 8189},
+	}
+	result = findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
+	if result.Status != preflight.StatusWarn || !strings.Contains(result.Detail, "TCP 9090") {
+		t.Fatalf("non-RTSP migration conflict = %v %q, want WARN for TCP 9090", result.Status, result.Detail)
 	}
 }
 

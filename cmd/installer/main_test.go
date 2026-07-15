@@ -126,6 +126,24 @@ func TestParseCLI_CommandModeAndArgNormalization(t *testing.T) {
 	}
 }
 
+func TestDefaultMediaMTXPortsUseCorrectProtocols(t *testing.T) {
+	for key, want := range map[string]int{
+		"RTSP_PORT": 8554, "RTMP_PORT": 1935, "HLS_PORT": 8888, "HLS_PORT2": 8889,
+	} {
+		if got := defaultPorts[key]; got != want {
+			t.Errorf("default TCP %s = %d, want %d", key, got, want)
+		}
+	}
+	if _, found := defaultPorts["HLS_PORT3"]; found {
+		t.Error("HLS_PORT3 must not be scanned as TCP")
+	}
+	for key, want := range map[string]int{"HLS_PORT3": 8890, "WEBRTC_ICE_PORT": 8189} {
+		if got := defaultUDPPorts[key]; got != want {
+			t.Errorf("default UDP %s = %d, want %d", key, got, want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // parseFlags tests
 // ---------------------------------------------------------------------------

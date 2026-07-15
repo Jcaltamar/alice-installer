@@ -177,21 +177,25 @@ func defaultWorkspaceDir() string {
 // It is injectable to allow tests to replace the factory without using os.Args.
 type depsFactoryFunc func(ctx context.Context, f flags) tui.Dependencies
 
-// defaultPorts returns the default TCP port assignments used across all services.
+// defaultPorts contains the TCP port assignments written to the environment.
 var defaultPorts = map[string]int{
-	"POSTGRES_PORT":      5432,
-	"BACKEND_PORT":       9090,
-	"WEBSOCKET_PORT":     4550,
-	"WEB_PORT":           8080,
-	"RTSP_PORT":          8554,
-	"REDIS_PORT":         6379,
-	"HLS_PORT":           8888,
-	"HLS_PORT2":          8889,
-	"HLS_PORT3":          8890,
-	"RTMP_PORT":          1935,
-	"MILVUS_PORT":        19530,
-	"MINIO_API_PORT":     9000,
-	"MINIO_CONSOLE_PORT": 9001,
+	"POSTGRES_PORT":       5432,
+	"BACKEND_PORT":        9090,
+	"WEBSOCKET_PORT":      4550,
+	"WEB_PORT":            8080,
+	ports.RTSPPortKey:     8554,
+	"REDIS_PORT":          6379,
+	ports.HLSPortKey:      8888,
+	ports.WebRTCSignalKey: 8889,
+	ports.RTMPPortKey:     1935,
+	"MILVUS_PORT":         19530,
+	"MINIO_API_PORT":      9000,
+	"MINIO_CONSOLE_PORT":  9001,
+}
+
+var defaultUDPPorts = map[string]int{
+	ports.SRTPortKey:       8890,
+	ports.WebRTCICEPortKey: 8189,
 }
 
 // parseFlags parses os.Args-style slice into a flags struct.
@@ -275,6 +279,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 		ConfigDir:         f.ConfigDir,
 		WorkspaceDir:      f.WorkspaceDir,
 		RequiredTCPPorts:  tcpPortValues(defaultPorts),
+		RequiredUDPPorts:  tcpPortValues(defaultUDPPorts),
 		MinDockerVersion:  "24.0.0",
 		MinComposeVersion: "2.21.0",
 	}
@@ -308,6 +313,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 		ConfigDir:            f.ConfigDir,
 		WorkspaceDir:         f.WorkspaceDir,
 		RequiredTCPPorts:     defaultPorts,
+		RequiredUDPPorts:     defaultUDPPorts,
 	}
 	if interactive {
 		deps.Detector = installation.CompositeDetector{
@@ -565,6 +571,7 @@ func runWithStaleCheck(
 			MediaDir:         tuiDeps.MediaDir,
 			ConfigDir:        tuiDeps.ConfigDir,
 			RequiredTCPPorts: tuiDeps.RequiredTCPPorts,
+			RequiredUDPPorts: tuiDeps.RequiredUDPPorts,
 		}
 
 		if runErr := runHeadlessFn(ctx, cfg, hdeps, out); runErr != nil {

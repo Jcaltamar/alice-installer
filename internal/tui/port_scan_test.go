@@ -68,6 +68,49 @@ func TestPortScanOneConflictBuildsConflictList(t *testing.T) {
 	}
 }
 
+func TestPortScanMigrationRTSPExemptionsRetainFinalPlan(t *testing.T) {
+	tcp := map[string]int{
+		"REDIS_PORT":      6379,
+		ports.RTSPPortKey: 8554, ports.RTMPPortKey: 1935,
+		ports.HLSPortKey: 8888, ports.WebRTCSignalKey: 8889,
+		"BACKEND_PORT": 9090,
+	}
+	udp := map[string]int{ports.SRTPortKey: 8890, ports.WebRTCICEPortKey: 8189}
+	scanner := &ports.FakePortScanner{
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889},
+		OccupiedUDPPorts: []int{8890, 8189},
+	}
+	m := NewPortScanModel(theme.Default(), scanner, tcp, udp)
+
+	normal := m.scanAll()
+	if len(normal.Conflicts) != 7 {
+		t.Fatalf("normal conflicts = %v, want Redis and all six RTSP ports", normal.Conflicts)
+	}
+
+	exemptTCP, exemptUDP := ports.MigrationRTSPExemptions()
+	m.setExemptPorts(exemptTCP, exemptUDP)
+	migration := m.scanAll()
+	if len(migration.Conflicts) != 0 {
+		t.Fatalf("migration conflicts = %v, want none", migration.Conflicts)
+	}
+	for key, want := range map[string]int{
+		"REDIS_PORT":      6379,
+		ports.RTSPPortKey: 8554, ports.RTMPPortKey: 1935,
+		ports.HLSPortKey: 8888, ports.WebRTCSignalKey: 8889,
+		ports.SRTPortKey: 8890, ports.WebRTCICEPortKey: 8189,
+	} {
+		if got := migration.FreePlan[key]; got != want {
+			t.Errorf("final plan %s = %d, want %d", key, got, want)
+		}
+	}
+
+	scanner.OccupiedTCPPorts = append(scanner.OccupiedTCPPorts, 9090)
+	migration = m.scanAll()
+	if len(migration.Conflicts) != 1 || migration.Conflicts[0].Key != "BACKEND_PORT" {
+		t.Fatalf("non-RTSP migration conflicts = %v, want BACKEND_PORT", migration.Conflicts)
+	}
+}
+
 // TestPortScanResolvingConflictWithFreePort verifies that entering an alternate
 // free port resolves the conflict.
 func TestPortScanResolvingConflictWithFreePort(t *testing.T) {
@@ -124,6 +167,29 @@ func TestPortScanResolvingWithOccupiedAlternateSetsError(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if updated.err == "" {
 		t.Error("submitting an occupied alternate port should set an error")
+	}
+}
+
+func TestPortScanResolvingUDPConflictUsesUDPAvailability(t *testing.T) {
+	m := NewPortScanModel(theme.Default(), &ports.FakePortScanner{OccupiedUDPPorts: []int{8189}}, nil, map[string]int{"MEDIAMTX_WEBRTC_PORT": 8189})
+	m, _ = m.Update(PortScanResultMsg{
+		Conflicts: []PortConflict{{Key: "MEDIAMTX_WEBRTC_PORT", Requested: 8189, Reason: "occupied"}},
+		FreePlan:  map[string]int{},
+	})
+
+	m.input.SetValue("8189")
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.err == "" || cmd != nil {
+		t.Fatal("TCP-free but UDP-occupied alternate should be rejected")
+	}
+
+	m.input.SetValue("8190")
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("UDP-free alternate should be accepted")
+	}
+	if _, ok := cmd().(PortsConfirmedMsg); !ok {
+		t.Fatal("accepted UDP alternate should confirm ports")
 	}
 }
 

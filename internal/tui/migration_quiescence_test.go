@@ -11,6 +11,7 @@ import (
 
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/migration"
+	"github.com/jcaltamar/alice-installer/internal/ports"
 )
 
 type fakeMigrationHandoff struct {
@@ -108,6 +109,35 @@ func TestMigrationQuiescenceAcquiresLeaseBeforePreflight(t *testing.T) {
 	}
 	if got := handoff.lastBackupRef.DumpPath; got != backup.DumpPath {
 		t.Fatalf("handoff backup = %q, want %q", got, backup.DumpPath)
+	}
+	if result := m.portscan.scanAll(); len(result.Conflicts) != 0 {
+		t.Fatalf("active migration lease port conflicts = %v, want exemptions applied", result.Conflicts)
+	}
+}
+
+func TestMigrationPortExemptionsClearWithLease(t *testing.T) {
+	deps := buildTestDeps()
+	deps.MigrationHandoff = &fakeMigrationHandoff{}
+	deps.RequiredTCPPorts = map[string]int{"REDIS_PORT": 6379, ports.RTSPPortKey: 8554}
+	deps.RequiredUDPPorts = map[string]int{ports.WebRTCICEPortKey: 8189}
+	deps.Ports = &ports.FakePortScanner{OccupiedTCPPorts: []int{6379, 8554}, OccupiedUDPPorts: []int{8189}}
+	m := NewModel(deps)
+	m.migrationPending = true
+	m.applyMigrationPortPolicy()
+	if got := m.portscan.scanAll(); len(got.Conflicts) != 3 {
+		t.Fatalf("pending migration without lease conflicts = %v, want three", got.Conflicts)
+	}
+
+	m.migrationLease = &migration.PreInstallMigrationLease{}
+	m.applyMigrationPortPolicy()
+	if got := m.portscan.scanAll(); len(got.Conflicts) != 0 {
+		t.Fatalf("live migration lease conflicts = %v, want none", got.Conflicts)
+	}
+
+	m.migrationPending, m.migrationLease = false, nil
+	m.applyMigrationPortPolicy()
+	if got := m.portscan.scanAll(); len(got.Conflicts) != 3 {
+		t.Fatalf("cleared migration conflicts = %v, want exemptions reset", got.Conflicts)
 	}
 }
 

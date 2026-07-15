@@ -38,6 +38,7 @@ func defaultInput() envgen.Input {
 			HLSPort:          8888,
 			HLSPort2:         8889,
 			HLSPort3:         8890,
+			WebRTCICEPort:    8189,
 			RTMPPort:         1935,
 			MilvusPort:       19530,
 			MinioAPIPort:     9000,
@@ -49,6 +50,22 @@ func defaultInput() envgen.Input {
 // newTemplater returns a Templater with a controlled password generator.
 func newTemplater(gen secrets.PasswordGenerator) *envgen.Templater {
 	return &envgen.Templater{PasswordGen: gen}
+}
+
+func TestTemplater_RenderRetainsMediaMTXPortPlan(t *testing.T) {
+	template := []byte("RTSP_PORT=1\nRTMP_PORT=2\nHLS_PORT=3\nHLS_PORT2=4\nHLS_PORT3=5\nWEBRTC_ICE_PORT=6\n")
+	rendered, err := newTemplater(secrets.FakeGenerator{}).Render(template, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"RTSP_PORT=8554", "RTMP_PORT=1935", "HLS_PORT=8888",
+		"HLS_PORT2=8889", "HLS_PORT3=8890", "WEBRTC_ICE_PORT=8189",
+	} {
+		if !strings.Contains(string(rendered), line+"\n") {
+			t.Errorf("rendered env missing %q:\n%s", line, rendered)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
