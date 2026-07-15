@@ -11,17 +11,20 @@ import (
 type PreInstallMigrationCoordinator struct {
 	Legacy          BackupRevalidator
 	PM2             installation.LegacyPM2Quiescer
+	Container       LegacyContainerController
 	RecoveryContext func() (context.Context, context.CancelFunc)
 }
 type PreInstallMigrationLease struct {
-	owner      *PreInstallMigrationCoordinator
-	quiescence installation.PM2Quiescence
-	mu         sync.Mutex
-	consumed   bool
+	owner       *PreInstallMigrationCoordinator
+	quiescence  installation.PM2Quiescence
+	containerID string
+	disposition ContainerDisposition
+	mu          sync.Mutex
+	consumed    bool
 }
 
-func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup BackupRef) (*PreInstallMigrationLease, error) {
-	if c == nil || c.Legacy == nil || c.PM2 == nil || ctx.Err() != nil {
+func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup BackupRef, containerID string, disposition ContainerDisposition) (*PreInstallMigrationLease, error) {
+	if c == nil || c.Legacy == nil || c.PM2 == nil || c.Container == nil || !fullContainerID.MatchString(containerID) || disposition > DispositionRemove || ctx.Err() != nil {
 		return nil, errors.New("pre-install migration is unavailable")
 	}
 	if _, err := c.Legacy.Revalidate(ctx, backup); err != nil || ctx.Err() != nil {
@@ -34,7 +37,26 @@ func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup Backu
 		}
 		return nil, errors.New("pre-install migration quiescence is incomplete")
 	}
-	return &PreInstallMigrationLease{owner: c, quiescence: cloneQuiescence(quiescence)}, nil
+	if result, err := c.Container.Apply(ctx, containerID, disposition); err != nil || ctx.Err() != nil {
+		var containerErr error
+		if disposition == DispositionRemove && result.Code == DispositionStoppedCode {
+			recoveryCtx, cancel := c.recoveryContext()
+			recovery, recoveryErr := c.Container.Recover(recoveryCtx, containerID, DispositionStop)
+			cancel()
+			if recoveryErr != nil || !recovery.Verified {
+				containerErr = errors.Join(errors.New(DispositionRecoveryUnprovenCode), recoveryErr)
+			}
+		}
+		_, pm2Err := c.recover(quiescence)
+		if containerErr != nil {
+			return nil, errors.Join(errors.New("legacy container disposition failed"), containerErr, pm2Err)
+		}
+		if errors.Is(err, ErrSudoDockerPermission) {
+			return nil, ErrSudoDockerPermission
+		}
+		return nil, errors.New("legacy container disposition failed")
+	}
+	return &PreInstallMigrationLease{owner: c, quiescence: cloneQuiescence(quiescence), containerID: containerID, disposition: disposition}, nil
 }
 func (c *PreInstallMigrationCoordinator) CompleteSuccess(lease *PreInstallMigrationLease) error {
 	_, _, err := c.consume(lease)
@@ -45,7 +67,16 @@ func (c *PreInstallMigrationCoordinator) CompleteFailure(lease *PreInstallMigrat
 	if err != nil || !first {
 		return installation.PM2Recovery{}, err
 	}
-	return c.recover(quiescence)
+	ctx, cancel := c.recoveryContext()
+	defer cancel()
+	container, containerErr := c.Container.Recover(ctx, lease.containerID, lease.disposition)
+	pm2, pm2Err := c.PM2.Recover(ctx, quiescence)
+	if lease.disposition == DispositionRemove {
+		pm2.Code = DispositionManualRecoveryCode
+	} else if containerErr != nil || !container.Verified {
+		pm2.Code = DispositionRecoveryUnprovenCode
+	}
+	return pm2, errors.Join(containerErr, pm2Err)
 }
 func (c *PreInstallMigrationCoordinator) recover(quiescence installation.PM2Quiescence) (installation.PM2Recovery, error) {
 	ctx, cancel := c.recoveryContext()

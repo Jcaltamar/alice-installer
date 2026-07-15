@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/headless"
 	"github.com/jcaltamar/alice-installer/internal/installation"
+	"github.com/jcaltamar/alice-installer/internal/migration"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/restart"
 	"github.com/jcaltamar/alice-installer/internal/tui"
@@ -839,6 +841,35 @@ func TestReloginAndTTYGuards(t *testing.T) {
 	}
 	if isTTY(file) {
 		t.Fatal("an unreadable file descriptor must not be treated as a terminal")
+	}
+}
+
+func TestInteractiveProductionMigrationUsesOnlySudoDockerAdapters(t *testing.T) {
+	if !restoreSupportedPlatform(runtime.GOOS, runtime.GOARCH) {
+		t.Skip("migration production wiring is platform-gated")
+	}
+	deps := buildDependencies(context.Background(), flags{WorkspaceDir: t.TempDir(), MediaDir: t.TempDir(), ConfigDir: t.TempDir()}, true)
+	action, ok := deps.LegacyBackupAction.(migration.BackupAction)
+	if !ok {
+		t.Fatalf("backup action type = %T", deps.LegacyBackupAction)
+	}
+	discovery, ok := action.Inspector.(migration.InspectorDiscovery)
+	if !ok {
+		t.Fatalf("discovery type = %T", action.Inspector)
+	}
+	inspector, ok := discovery.Inspector.(migration.DockerCLIInspector)
+	if !ok || !strings.Contains(strings.ToLower(fmt.Sprintf("%T", inspector.Runner)), "sudodocker") {
+		t.Fatalf("migration inspector runner = %T", inspector.Runner)
+	}
+	if _, ok := action.Executor.(migration.SudoDockerExecutor); !ok {
+		t.Fatalf("migration helper executor = %T", action.Executor)
+	}
+	validator, ok := action.Validator.(migration.PG11ArchiveValidator)
+	if !ok {
+		t.Fatalf("archive validator = %T", action.Validator)
+	}
+	if _, ok := validator.Executor.(migration.SudoDockerExecutor); !ok {
+		t.Fatalf("archive validator executor = %T", validator.Executor)
 	}
 }
 

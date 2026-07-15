@@ -329,28 +329,30 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 		if restoreSupportedPlatform(runtime.GOOS, runtime.GOARCH) {
 			backupRoot := "/opt/alice/backups/"
 			executor := migration.OSBinaryExecutor{}
+			migrationDocker := migration.SudoDockerExecutor{Executor: executor}
 			pm2Runner := &platform.OSCommandRunner{}
 			deps.MigrationAuthenticator = tui.SudoMigrationAuthenticator{}
 			deps.LegacyBackupAction = migration.BackupAction{
 				Resolver:  migration.Resolver{},
-				Inspector: migration.InspectorDiscovery{Inspector: migration.DockerCLIInspector{Runner: &platform.OSCommandRunner{}}},
+				Inspector: migration.InspectorDiscovery{Inspector: migration.DockerCLIInspector{Runner: migration.NewSudoDockerRunner(executor)}},
 				Store: migration.OSDestinationStore{Privilege: migration.SudoDestinationPrivilege{
 					Runner: &platform.OSCommandRunner{},
 				}},
-				Executor:  executor,
+				Executor:  migrationDocker,
 				Transport: migration.CredentialTransport{},
-				Validator: migration.PG11ArchiveValidator{Executor: executor, Timeout: 30 * time.Minute},
+				Validator: migration.PG11ArchiveValidator{Executor: migrationDocker, Timeout: 30 * time.Minute},
 				GOOS:      runtime.GOOS,
 				Timeout:   30 * time.Minute,
 			}
 			deps.LegacyBackupRequest = migration.BackupRequest{Destination: backupRoot}
 			coordinator, err := migration.NewProductionRestoreCoordinator(migration.ProductionRestoreDependencies{
-				Compose: composeRunner, OperationID: newRestoreOperationID,
+				Compose: composeRunner, OperationID: newRestoreOperationID, DockerExecutor: migrationDocker,
 			})
 			if err == nil {
 				deps.LegacyRestoreAction = coordinator
 				deps.MigrationHandoff = &migration.PreInstallMigrationCoordinator{
-					Legacy: migration.BackupGate{Validator: migration.PG11ArchiveValidator{Executor: executor, Timeout: 30 * time.Minute}},
+					Legacy:    migration.BackupGate{Validator: migration.PG11ArchiveValidator{Executor: migrationDocker, Timeout: 30 * time.Minute}},
+					Container: migration.DockerLegacyContainerController{Executor: migrationDocker},
 					PM2: installation.PM2Quiescer{
 						Snapshots: installation.LinuxPM2SnapshotProvider{
 							Inventory: installation.LinuxPM2Inventory{Runner: pm2Runner},

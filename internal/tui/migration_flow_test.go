@@ -85,6 +85,16 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 	}
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
+	if m.state != StateMigrationDisposition || cmd != nil {
+		t.Fatalf("final confirmation must precede disposition: state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("disposition must emit a typed selection")
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
 	if m.state != StateMigrationQuiescence || cmd == nil {
 		t.Fatalf("confirmed migration must acquire a PM2 lease before preflight: state/cmd = %v/%v", m.state, cmd)
 	}
@@ -374,5 +384,77 @@ func TestModelInitStartsSplashWithoutMigrationWork(t *testing.T) {
 	m := NewModel(buildTestDeps())
 	if cmd := m.Init(); cmd != nil {
 		t.Fatal("splash initialization must wait for input without migration work")
+	}
+}
+
+func TestMigrationDispositionDefaultsToStopAndRemoveRequiresSecondConfirmation(t *testing.T) {
+	t.Run("stop is default", func(t *testing.T) {
+		deps := buildTestDeps()
+		handoff := &fakeMigrationHandoff{}
+		deps.MigrationHandoff = handoff
+		m := NewModel(deps)
+		m.state = StateMigrationDisposition
+		m.migrationDisposition = migrationDispositionModel{theme: deps.Theme}
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(Model)
+		updated, cmd = m.Update(cmd())
+		m = updated.(Model)
+		if m.state != StateMigrationQuiescence || m.containerDisposition != migration.DispositionStop || cmd == nil || handoff.beginCalls != 0 {
+			t.Fatalf("default disposition state/choice/cmd/calls = %v/%v/%v/%d", m.state, m.containerDisposition, cmd, handoff.beginCalls)
+		}
+	})
+
+	t.Run("remove requires explicit second confirmation", func(t *testing.T) {
+		deps := buildTestDeps()
+		handoff := &fakeMigrationHandoff{}
+		deps.MigrationHandoff = handoff
+		m := NewModel(deps)
+		m.state = StateMigrationDisposition
+		m.migrationDisposition = migrationDispositionModel{theme: deps.Theme}
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(Model)
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(Model)
+		updated, cmd = m.Update(cmd())
+		m = updated.(Model)
+		if m.state != StateMigrationRemoveConfirm || cmd != nil || handoff.beginCalls != 0 || !strings.Contains(m.View(), "cannot automatically recreate") {
+			t.Fatalf("remove checkpoint state/cmd/calls/view = %v/%v/%d/%q", m.state, cmd, handoff.beginCalls, m.View())
+		}
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(Model)
+		if m.state != StateMigrationQuiescence || cmd == nil || handoff.beginCalls != 0 {
+			t.Fatalf("confirmed removal state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
+		}
+	})
+}
+
+func TestMigrationSudoDockerPermissionFailureIsRedacted(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateBackupPreflight
+	updated, _ := m.Update(BackupPreflightCompletedMsg{Err: migration.ErrSudoDockerPermission})
+	m = updated.(Model)
+	view := m.View()
+	if m.backupResult.FailureCode != migration.BackupFailureSudoDockerPermission || !strings.Contains(view, "backup-sudo-docker-permission") {
+		t.Fatalf("permission state/code/view = %v/%v/%q", m.state, m.backupResult.FailureCode, view)
+	}
+	for _, forbidden := range []string{"sudo:", "permission denied", strings.Repeat("a", 64)} {
+		if strings.Contains(strings.ToLower(view), strings.ToLower(forbidden)) {
+			t.Fatalf("permission view leaked %q: %q", forbidden, view)
+		}
+	}
+}
+
+func TestRemoveDownstreamFailureShowsBoundedManualRecovery(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateMigrationResult
+	m.migrationRecoveryCode = migration.DispositionManualRecoveryCode
+	view := m.View()
+	for _, want := range []string{migration.DispositionManualRecoveryCode, "cannot be recreated automatically", "preserved volumes", "validated backup"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("manual recovery view missing %q: %q", want, view)
+		}
+	}
+	if strings.Contains(view, strings.Repeat("a", 64)) {
+		t.Fatalf("manual recovery view leaked an ID: %q", view)
 	}
 }

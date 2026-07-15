@@ -22,7 +22,7 @@ type fakeMigrationHandoff struct {
 	lastBackupRef migration.BackupRef
 }
 
-func (h *fakeMigrationHandoff) Begin(_ context.Context, ref migration.BackupRef) (*migration.PreInstallMigrationLease, error) {
+func (h *fakeMigrationHandoff) Begin(_ context.Context, ref migration.BackupRef, _ string, _ migration.ContainerDisposition) (*migration.PreInstallMigrationLease, error) {
 	h.beginCalls++
 	h.lastBackupRef = ref
 	if h.beginErr != nil {
@@ -56,12 +56,19 @@ func TestMigrationQuiescenceAcquiresLeaseBeforePreflight(t *testing.T) {
 		t.Fatalf("validated backup must wait for operator confirmation: state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
 	}
 	view := m.View()
-	for _, text := range []string{"stop the confirmed legacy PM2 services", "installing the new services", "Press Enter to continue", "preserve the backup"} {
+	for _, text := range []string{"stopping confirmed legacy PM2 services", "installing new services", "Press Enter to continue", "preserve the backup"} {
 		if !strings.Contains(view, text) {
 			t.Fatalf("migration checkpoint view missing %q: %s", text, view)
 		}
 	}
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.state != StateMigrationDisposition || cmd != nil || handoff.beginCalls != 0 {
+		t.Fatalf("disposition choice state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
 	if m.state != StateMigrationQuiescence || cmd == nil || handoff.beginCalls != 0 {
 		t.Fatalf("acquisition state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.beginCalls)
@@ -110,6 +117,10 @@ func TestMigrationQuiescenceFailureBlocksBeforePreflight(t *testing.T) {
 	updated, cmd := m.Update(BackupCompletedMsg{Result: migration.BackupResult{Outcome: migration.BackupValidated}})
 	m = updated.(Model)
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
 	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
@@ -189,7 +200,7 @@ func TestMigrationRecoveryPanicBecomesBoundedTerminalResult(t *testing.T) {
 
 type panicFailureHandoff struct{}
 
-func (panicFailureHandoff) Begin(context.Context, migration.BackupRef) (*migration.PreInstallMigrationLease, error) {
+func (panicFailureHandoff) Begin(context.Context, migration.BackupRef, string, migration.ContainerDisposition) (*migration.PreInstallMigrationLease, error) {
 	return nil, errors.New("unused")
 }
 

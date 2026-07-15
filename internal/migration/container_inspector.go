@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ func (i DockerCLIInspector) Candidates(ctx context.Context, image ImageIdentity)
 	}
 	stdout, _, err := i.Runner.Run(ctx, "docker", "ps", "--all", "--no-trunc", "--format", "{{.ID}}\t{{.Image}}")
 	if err != nil {
+		if errors.Is(err, ErrSudoDockerPermission) {
+			return nil, ErrSudoDockerPermission
+		}
 		return nil, ErrContainerPrecondition
 	}
 	var candidates []ContainerSummary
@@ -46,6 +50,9 @@ func (i DockerCLIInspector) Inspect(ctx context.Context, id string) (ContainerDe
 	}
 	stdout, _, err := i.Runner.Run(ctx, "docker", "inspect", id)
 	if err != nil {
+		if errors.Is(err, ErrSudoDockerPermission) {
+			return ContainerDetails{}, ErrSudoDockerPermission
+		}
 		return ContainerDetails{}, ErrContainerPrecondition
 	}
 	var inspected []dockerInspect
