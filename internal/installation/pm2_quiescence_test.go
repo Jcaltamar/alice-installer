@@ -111,7 +111,7 @@ func TestCorrelatePM2SelectsOnlyProductionEligibleIdentities(t *testing.T) {
 		{ID: 8, PID: 80, Name: "front-guardian", CWD: guardianRoot + "-old", ExecPath: "/usr/bin/node", Status: "online"},
 		{ID: 9, PID: 90, Name: "other", CWD: guardianRoot, ExecPath: "/usr/bin/node", Status: "online"},
 	}
-	sockets := []SocketOwner{{1230, 8080}, {1231, 4550}, {11174, 9090}, {30, 4550}, {40, 8080}, {60, 4550}, {70, 4550}, {80, 8080}, {90, 8080}}
+	sockets := []SocketOwner{{1230, 8080}, {1231, 4550}, {11174, 9090}, {30, 10030}, {40, 10040}, {60, 10060}, {70, 10070}, {80, 10080}, {90, 10090}}
 	proc := map[int]ProcIdentity{}
 	for _, record := range records {
 		proc[record.PID] = ProcIdentity{CWD: record.CWD, ExecPath: record.ExecPath, StartTicks: uint64(record.PID)}
@@ -123,6 +123,14 @@ func TestCorrelatePM2SelectsOnlyProductionEligibleIdentities(t *testing.T) {
 	records[0].ID, records[1].ID = -1, 0
 	if got, err = CorrelatePM2(records, sockets, proc); err != nil || len(got) != 3 || got[0].PMID != 0 {
 		t.Fatalf("zero ID contract = %#v, %v", got, err)
+	}
+}
+func TestCorrelatePM2SelectsExactContractWhenPIDOwnsMultipleApprovedPorts(t *testing.T) {
+	record := PM2Record{ID: 1, PID: 1230, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/node", Status: "online"}
+	proc := map[int]ProcIdentity{1230: {CWD: guardianRoot, ExecPath: "/usr/bin/node", StartTicks: 42}}
+	got, err := CorrelatePM2([]PM2Record{record}, []SocketOwner{{PID: 1230, Port: 9090}, {PID: 1230, Port: 8080}}, proc)
+	if err != nil || len(got) != 1 || got[0].Port != 8080 || got[0].PID != 1230 || got[0].PMID != 1 {
+		t.Fatalf("selected = %#v, %v", got, err)
 	}
 }
 func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {

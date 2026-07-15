@@ -165,28 +165,46 @@ func ParsePM2Inventory(data []byte) ([]PM2Record, error) {
 	return records, nil
 }
 func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcIdentity) ([]PM2ProcessIdentity, error) {
-	owners := make(map[int]SocketOwner, len(sockets))
+	owners := make(map[int]map[uint16]bool, len(sockets))
+	ports := make(map[uint16]int, len(sockets))
 	for _, socket := range sockets {
-		if socket.PID <= 0 || socket.Port == 0 || owners[socket.PID] != (SocketOwner{}) {
+		if socket.PID <= 0 || socket.Port == 0 {
 			return nil, errors.New("socket ownership is ambiguous")
 		}
-		owners[socket.PID] = socket
+		if owner, ok := ports[socket.Port]; ok && owner != socket.PID {
+			return nil, errors.New("socket ownership is ambiguous")
+		}
+		ports[socket.Port] = socket.PID
+		if owners[socket.PID] == nil {
+			owners[socket.PID] = map[uint16]bool{}
+		}
+		owners[socket.PID][socket.Port] = true
 	}
 	selected := make([]PM2ProcessIdentity, 0)
 	for _, record := range records {
 		if record.ID < 0 {
 			continue
 		}
-		port, ok := owners[record.PID]
-		root, allowed := allowedPM2Contract(record.Name, record.CWD, port.Port)
-		if !ok || !allowed || record.Status != "online" {
+		var port uint16
+		var root string
+		matches := 0
+		for candidate := range owners[record.PID] {
+			if candidateRoot, allowed := allowedPM2Contract(record.Name, record.CWD, candidate); allowed {
+				port, root = candidate, candidateRoot
+				matches++
+			}
+		}
+		if matches == 0 || record.Status != "online" {
 			continue
+		}
+		if matches != 1 {
+			return nil, errors.New("socket ownership is ambiguous")
 		}
 		identity, ok := proc[record.PID]
 		if !ok || identity.StartTicks == 0 || !samePath(identity.CWD, record.CWD) || !samePath(identity.ExecPath, record.ExecPath) || !within(root, identity.CWD) {
 			return nil, errors.New("process identity is invalid")
 		}
-		selected = append(selected, PM2ProcessIdentity{PMID: record.ID, Name: record.Name, PID: record.PID, CWD: identity.CWD, ExecPath: identity.ExecPath, Port: port.Port, StartTicks: identity.StartTicks})
+		selected = append(selected, PM2ProcessIdentity{PMID: record.ID, Name: record.Name, PID: record.PID, CWD: identity.CWD, ExecPath: identity.ExecPath, Port: port, StartTicks: identity.StartTicks})
 	}
 	if len(selected) == 0 {
 		return nil, errors.New("no qualifying PM2 identity")
