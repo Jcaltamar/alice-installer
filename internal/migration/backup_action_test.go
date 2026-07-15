@@ -53,6 +53,21 @@ func TestBackupActionRequiresConfirmationBeforeCreatingDestination(t *testing.T)
 	}
 }
 
+func TestBackupActionEmitsRealProgressStagesInOrder(t *testing.T) {
+	destination := filepath.Join(secureTempDir(t), "backups")
+	action := testBackupAction(t, []byte("custom\x00dump"))
+	plan, err := action.Preflight(context.Background(), BackupRequest{Destination: destination, SourceRoots: []string{secureTempDir(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []BackupProgressStage
+	result := action.RunWithProgress(context.Background(), plan, func(stage BackupProgressStage) { got = append(got, stage) })
+	want := []BackupProgressStage{BackupProgressPreparing, BackupProgressDumping, BackupProgressSyncing, BackupProgressValidating, BackupProgressPublishing}
+	if result.Outcome != BackupValidated || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("outcome/stages = %v/%v, want %v/%v", result.Outcome, got, BackupValidated, want)
+	}
+}
+
 func TestBackupActionPublishesOnlyValidatedOutcome(t *testing.T) {
 	destination := filepath.Join(secureTempDir(t), "backups")
 	action := testBackupAction(t, []byte("custom\x00dump"))

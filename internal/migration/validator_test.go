@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -31,13 +32,75 @@ func TestPG11ArchiveValidatorUsesPinnedRestoreListWithoutDatabaseConnection(t *t
 	if spec.Name != "docker" || containsShell(spec.Args) || strings.Contains(strings.Join(spec.Args, " "), validationSecretSentinel) {
 		t.Fatalf("unsafe validator spec: %#v", spec)
 	}
-	assertArgsContainInOrder(t, spec.Args,
+	info, err := os.Lstat(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, ok := numericOwner(info)
+	if !ok {
+		t.Fatal("numeric owner unavailable")
+	}
+	wantArgs := []string{
 		"run", "--rm", "--pull=never", "--name", spec.Args[4],
-		"--mount", "type=bind,src="+dump+",dst="+ContainerDumpPath+",readonly",
+		"--mount", "type=bind,src=" + dump + ",dst=" + ContainerDumpPath + ",readonly",
+		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		string(PostgreSQL11Image), "pg_restore", "--list", ContainerDumpPath,
-	)
+	}
+	if strings.Join(spec.Args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("validator argv = %#v, want %#v", spec.Args, wantArgs)
+	}
 	if strings.Contains(strings.Join(spec.Args, " "), "--host") || strings.Contains(strings.Join(spec.Args, " "), "--dbname") || strings.Contains(strings.Join(spec.Args, " "), "PGPASS") {
 		t.Fatalf("validator may not construct a database connection: %#v", spec.Args)
+	}
+}
+
+func TestSafeStagedDumpRejectsMismatchedOwnership(t *testing.T) {
+	dump := filepath.Join(t.TempDir(), "staged.dump.part")
+	if err := os.WriteFile(dump, []byte("custom dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, ok := stagedDumpOwner(dump)
+	if !ok {
+		t.Fatal("staged owner unavailable")
+	}
+	if safeOwnedStagedDump(dump, uid+1, gid) || safeOwnedStagedDump(dump, uid, gid+1) {
+		t.Fatal("staged dump accepted mismatched ownership")
+	}
+}
+
+func TestPG11ArchiveValidatorRejectsUnsafePathAndMode(t *testing.T) {
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "staged.dump.part")
+	if err := os.WriteFile(dump, []byte("custom dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(dir, "staged-link")
+	if err := os.Symlink(dump, symlink); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		path string
+		mode os.FileMode
+	}{
+		{name: "relative path", path: filepath.Base(dump), mode: 0o600},
+		{name: "symlink", path: symlink, mode: 0o600},
+		{name: "group readable", path: dump, mode: 0o640},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.path == dump {
+				if err := os.Chmod(dump, tt.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			executor := &validationFakeExecutor{}
+			if err := (PG11ArchiveValidator{Executor: executor}).Validate(context.Background(), tt.path); !errors.Is(err, ErrArchiveValidation) {
+				t.Fatalf("Validate() error = %v, want ErrArchiveValidation", err)
+			}
+			if len(executor.specs) != 0 {
+				t.Fatalf("unsafe staged dump executed Docker: %#v", executor.specs)
+			}
+		})
 	}
 }
 

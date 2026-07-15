@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jcaltamar/alice-installer/internal/asterisk"
 	"github.com/jcaltamar/alice-installer/internal/compose"
@@ -141,6 +144,11 @@ type Model struct {
 	backupPlan            migration.BackupPlan
 	backupResult          migration.BackupResult
 	backupCancel          context.CancelFunc
+	backupCancelling      bool
+	backupSpinner         spinner.Model
+	backupProgress        <-chan tea.Msg
+	backupStage           migration.BackupProgressStage
+	backupElapsed         time.Duration
 	restoreCancel         context.CancelFunc
 	quiescenceCancel      context.CancelFunc
 	restoreResult         migration.RestoreResult
@@ -192,6 +200,9 @@ func NewModel(deps Dependencies) Model {
 	gpuInfo := deps.GPU.Detect(context.Background())
 	gpuDetected := gpuInfo.ToolkitInstalled
 
+	backupSpinner := spinner.New()
+	backupSpinner.Spinner = spinner.Dot
+	backupSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(string(theme.ColorPrimary)))
 	return Model{
 		deps:                  deps,
 		state:                 StateSplash,
@@ -199,6 +210,7 @@ func NewModel(deps Dependencies) Model {
 		attemptedActions:      map[string]bool{},
 		splash:                NewSplashModel(deps.Theme, deps.Version),
 		preflight:             NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
+		backupSpinner:         backupSpinner,
 		workspace:             NewWorkspaceInputModel(deps.Theme),
 		optionalPackagesModel: NewOptionalPackagesModel(deps.Theme, asteriskAvailable(deps)),
 		portscan: NewPortScanModel(
@@ -232,6 +244,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.Type == tea.KeyCtrlC:
 			if m.state == StateBackupRunning && m.backupCancel != nil {
+				m.backupCancelling = true
 				m.backupCancel()
 				return m, nil
 			}
@@ -250,6 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case msg.Type == tea.KeyEsc && m.state == StateBackupRunning:
 			if m.backupCancel != nil {
+				m.backupCancelling = true
 				m.backupCancel()
 			}
 			return m, nil
@@ -278,6 +292,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.state == StateBackupRunning && m.backupCancel != nil {
+				m.backupCancelling = true
 				m.backupCancel()
 				return m, nil
 			}
@@ -392,13 +407,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = StateBackupRunning
 		ctx, cancel := context.WithCancel(context.Background())
 		m.backupCancel = cancel
-		return m, func() tea.Msg { return BackupCompletedMsg{Result: m.deps.LegacyBackupAction.Run(ctx, m.backupPlan)} }
+		m.backupStage = migration.BackupProgressPreparing
+		m.backupElapsed = 0
+		m.backupCancelling = false
+		progress := make(chan tea.Msg, 6)
+		m.backupProgress = progress
+		run := func() tea.Msg {
+			defer close(progress)
+			if action, ok := m.deps.LegacyBackupAction.(legacyBackupProgressAction); ok {
+				result := action.RunWithProgress(ctx, m.backupPlan, func(stage migration.BackupProgressStage) { progress <- BackupProgressMsg{Stage: stage} })
+				return BackupCompletedMsg{Result: result}
+			}
+			return BackupCompletedMsg{Result: m.deps.LegacyBackupAction.Run(ctx, m.backupPlan)}
+		}
+		return m, tea.Batch(run, m.backupSpinner.Tick, backupElapsedTick(), waitBackupProgress(progress))
+
+	case BackupProgressMsg:
+		if m.state != StateBackupRunning || m.backupCancelling {
+			return m, nil
+		}
+		m.backupStage = msg.Stage
+		return m, waitBackupProgress(m.backupProgress)
+
+	case backupProgressClosedMsg:
+		return m, nil
+
+	case backupElapsedMsg:
+		if m.state != StateBackupRunning || m.backupCancelling {
+			return m, nil
+		}
+		m.backupElapsed += time.Second
+		return m, backupElapsedTick()
+
+	case spinner.TickMsg:
+		if m.state == StateBackupRunning && !m.backupCancelling {
+			var spinnerCmd tea.Cmd
+			m.backupSpinner, spinnerCmd = m.backupSpinner.Update(msg)
+			return m, spinnerCmd
+		}
 
 	case BackupCompletedMsg:
 		if m.state != StateBackupRunning {
 			return m, nil
 		}
 		m.backupCancel = nil
+		m.backupCancelling = false
+		m.backupProgress = nil
 		m.backupResult = msg.Result
 		if msg.Result.Outcome == migration.BackupValidated {
 			if m.deps.LegacyRestoreAction == nil || m.deps.MigrationHandoff == nil {
@@ -849,7 +903,7 @@ func (m Model) View() string {
 	case StateBackupConfirm:
 		return m.backupConfirmationView()
 	case StateBackupRunning:
-		return m.deps.Theme.TextMuted.Render("Creating backup: dump, validate, and publish. Press Escape to cancel safely.")
+		return m.backupRunningView()
 	case StateMigrationConfirm:
 		return m.deps.Theme.Primary.Bold(true).Render("Backup validated") + fmt.Sprintf("\n\n%s\nDump: %s\nManifest: %s\nSHA-256: %s\nSize: %d bytes\n\nThe validated backup is complete. Continuing will choose the legacy PostgreSQL disposition before stopping confirmed legacy PM2 services and installing new services.\n\nPress Enter to continue or Escape to stop here and preserve the backup.\n", m.backupStagesView(), m.backupResult.DumpPath, m.backupResult.ManifestPath, m.backupResult.SHA256, m.backupResult.Size)
 	case StateMigrationDisposition:
@@ -897,6 +951,42 @@ func (m Model) View() string {
 		return m.result.View()
 	default:
 		return m.deps.Theme.TextMuted.Render("Loading…")
+	}
+}
+
+func (m Model) backupRunningView() string {
+	if m.backupCancelling {
+		return m.deps.Theme.Primary.Bold(true).Render("Cancelling backup safely") + "\n\n" + m.deps.Theme.TextMuted.Render("Waiting for the backup helper and staged files to be cleaned up.") + "\n"
+	}
+	stages := [...]string{
+		"Preparing destination and credentials",
+		"Creating database dump",
+		"Syncing staged file",
+		"Validating archive",
+		"Publishing backup, checksum, and manifest",
+	}
+	stage := "Preparing destination and credentials"
+	if int(m.backupStage) < len(stages) {
+		stage = stages[m.backupStage]
+	}
+	return m.deps.Theme.Primary.Bold(true).Render("Creating validated backup") + "\n\n" + m.backupSpinner.View() + " " + m.deps.Theme.TextMuted.Render(fmt.Sprintf("%s (%s elapsed)", stage, m.backupElapsed)) + "\n\n" + m.deps.Theme.TextMuted.Render("Press Escape to cancel safely.") + "\n"
+}
+
+type BackupProgressMsg struct{ Stage migration.BackupProgressStage }
+type backupElapsedMsg struct{}
+type backupProgressClosedMsg struct{}
+
+func backupElapsedTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return backupElapsedMsg{} })
+}
+
+func waitBackupProgress(progress <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-progress
+		if !ok {
+			return backupProgressClosedMsg{}
+		}
+		return msg
 	}
 }
 

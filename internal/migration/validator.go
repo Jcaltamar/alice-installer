@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,7 +29,8 @@ type PG11ArchiveValidator struct {
 }
 
 func (v PG11ArchiveValidator) Validate(ctx context.Context, stagedPath string) error {
-	if ctx.Err() != nil || v.Executor == nil || !safeStagedDump(stagedPath) {
+	uid, gid, ok := stagedDumpOwner(stagedPath)
+	if ctx.Err() != nil || v.Executor == nil || !ok || !safeOwnedStagedDump(stagedPath, uid, gid) {
 		return ErrArchiveValidation
 	}
 	name, err := randomToken()
@@ -44,6 +46,7 @@ func (v PG11ArchiveValidator) Validate(ctx context.Context, stagedPath string) e
 		Spec: ProcessSpec{Name: "docker", Args: []string{
 			"run", "--rm", "--pull=never", "--name", "alice-pg11-validate-" + name,
 			"--mount", "type=bind,src=" + stagedPath + ",dst=" + ContainerDumpPath + ",readonly",
+			"--user", fmt.Sprintf("%d:%d", uid, gid),
 			string(PostgreSQL11Image), "pg_restore", "--list", ContainerDumpPath,
 		}, Timeout: timeout},
 	}
@@ -55,6 +58,25 @@ func (v PG11ArchiveValidator) Validate(ctx context.Context, stagedPath string) e
 		return ErrArchiveValidation
 	}
 	return nil
+}
+
+func stagedDumpOwner(path string) (int, int, bool) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return 0, 0, false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || info.Size() <= 0 {
+		return 0, 0, false
+	}
+	return numericOwner(info)
+}
+
+func safeOwnedStagedDump(path string, uid, gid int) bool {
+	if uid < 0 || gid < 0 || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm() == 0o600 && info.Size() > 0 && ownedBy(info, uid, gid)
 }
 
 func safeStagedDump(path string) bool {

@@ -287,6 +287,16 @@ type BackupAction struct {
 	Timeout   time.Duration
 }
 
+type BackupProgressStage uint8
+
+const (
+	BackupProgressPreparing BackupProgressStage = iota
+	BackupProgressDumping
+	BackupProgressSyncing
+	BackupProgressValidating
+	BackupProgressPublishing
+)
+
 // Preflight does not create directories, locks, staging files, credentials, or processes.
 func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (BackupPlan, error) {
 	if ctx.Err() != nil {
@@ -324,6 +334,10 @@ func (a BackupAction) Preflight(ctx context.Context, request BackupRequest) (Bac
 // Run is intentionally limited to unvalidated staging. Slice 4.5 owns archive
 // validation, checksum, manifest construction, and every final rename.
 func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
+	return a.RunWithProgress(ctx, plan, nil)
+}
+
+func (a BackupAction) RunWithProgress(ctx context.Context, plan BackupPlan, progress func(BackupProgressStage)) BackupResult {
 	stages := newBackupDiagnostics()
 	if ctx.Err() != nil {
 		return backupFailure(BackupCancelled, stages, BackupStagePreconditions, BackupFailureCancelled, BackupRemediationRetry)
@@ -338,6 +352,7 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		return backupFailure(BackupPreconditionFailed, stages, BackupStagePreconditions, BackupFailureLegacyContainerInvalid, BackupRemediationPrerequisites)
 	}
 	stages[BackupStagePreconditions].Status = BackupStagePassed
+	emitBackupProgress(progress, BackupProgressPreparing)
 	staged, err := a.Store.Prepare(ctx, plan.destination)
 	if err != nil {
 		return backupFailure(BackupDestinationFailed, stages, BackupStageDestination, BackupFailureDestination, BackupRemediationDestination)
@@ -366,6 +381,7 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		_ = credential.Cleanup()
 		return backupFailure(BackupCancelled, stages, BackupStageDump, BackupFailureCancelled, BackupRemediationRetry)
 	}
+	emitBackupProgress(progress, BackupProgressDumping)
 	result := RunHelper(ctx, a.Executor, run, credential, staged)
 	if result.Outcome == ProcessCancelled {
 		return backupFailure(BackupCancelled, stages, BackupStageDump, BackupFailureCancelled, BackupRemediationRetry)
@@ -381,6 +397,7 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		return backupFailure(BackupDumpFailed, stages, BackupStageDump, code, BackupRemediationDocker)
 	}
 	stages[BackupStageDump].Status = BackupStagePassed
+	emitBackupProgress(progress, BackupProgressSyncing)
 	if ctx.Err() != nil {
 		return backupFailure(BackupCancelled, stages, BackupStageStagedFile, BackupFailureCancelled, BackupRemediationRetry)
 	}
@@ -394,6 +411,7 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		return backupFailure(BackupDumpFailed, stages, BackupStageStagedFile, BackupFailureStagedEmpty, BackupRemediationStorage)
 	}
 	stages[BackupStageStagedFile].Status = BackupStagePassed
+	emitBackupProgress(progress, BackupProgressValidating)
 	if ctx.Err() != nil {
 		return backupFailure(BackupCancelled, stages, BackupStageArchiveValidation, BackupFailureCancelled, BackupRemediationRetry)
 	}
@@ -401,6 +419,7 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 		return backupFailure(BackupValidationFailed, stages, BackupStageArchiveValidation, BackupFailureArchiveValidation, BackupRemediationArchive)
 	}
 	stages[BackupStageArchiveValidation].Status = BackupStagePassed
+	emitBackupProgress(progress, BackupProgressPublishing)
 	if ctx.Err() != nil {
 		return backupFailure(BackupCancelled, stages, BackupStagePublication, BackupFailureCancelled, BackupRemediationRetry)
 	}
@@ -411,4 +430,10 @@ func (a BackupAction) Run(ctx context.Context, plan BackupPlan) BackupResult {
 	stages[BackupStagePublication].Status = BackupStagePassed
 	keep = true
 	return BackupResult{Outcome: BackupValidated, DumpPath: publication.DumpPath, ManifestPath: publication.ManifestPath, SHA256: publication.SHA256, Size: publication.Size, Stages: stages}
+}
+
+func emitBackupProgress(progress func(BackupProgressStage), stage BackupProgressStage) {
+	if progress != nil {
+		progress(stage)
+	}
 }

@@ -78,7 +78,11 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 	if m.state != StateBackupRunning || cmd == nil || action.runCalls != 0 {
 		t.Fatalf("confirmation state/cmd/run = %v/%v/%d", m.state, cmd, action.runCalls)
 	}
-	updated, cmd = m.Update(cmd())
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("backup start command = %#v, want batch", cmd())
+	}
+	updated, cmd = m.Update(batch[0]())
 	m = updated.(Model)
 	if m.state != StateMigrationConfirm || cmd != nil {
 		t.Fatalf("validated backup must wait before PM2 quiescence: state/cmd = %v/%v", m.state, cmd)
@@ -102,6 +106,43 @@ func TestMigrationRequiresConfirmationBeforeRun(t *testing.T) {
 	m = updated.(Model)
 	if m.state != StatePreflight || !m.migrationPending || action.runCalls != 1 {
 		t.Fatalf("validated backup must hand off to unchanged install path: state/pending/run = %v/%t/%d", m.state, m.migrationPending, action.runCalls)
+	}
+}
+
+func TestMigrationBackupProgressAnimatesAndShowsRealStages(t *testing.T) {
+	m := NewModel(buildTestDeps())
+	m.state = StateBackupRunning
+	m.backupStage = migration.BackupProgressDumping
+	before := m.View()
+	if !strings.Contains(before, "Creating database dump") || !strings.Contains(before, "0s elapsed") {
+		t.Fatalf("initial progress view = %q", before)
+	}
+
+	tick := m.backupSpinner.Tick()
+	updated, cmd := m.Update(tick)
+	m = updated.(Model)
+	if cmd == nil || m.View() == before {
+		t.Fatalf("spinner did not animate: before=%q after=%q cmd=%v", before, m.View(), cmd)
+	}
+	updated, cmd = m.Update(backupElapsedMsg{})
+	m = updated.(Model)
+	if cmd == nil || !strings.Contains(m.View(), "1s elapsed") {
+		t.Fatalf("elapsed progress view/cmd = %q/%v", m.View(), cmd)
+	}
+	updated, cmd = m.Update(BackupProgressMsg{Stage: migration.BackupProgressValidating})
+	m = updated.(Model)
+	if cmd == nil || !strings.Contains(m.View(), "Validating archive") {
+		t.Fatalf("stage progress view/cmd = %q/%v", m.View(), cmd)
+	}
+
+	updated, cmd = m.Update(BackupCompletedMsg{Result: migration.BackupResult{Outcome: migration.BackupValidationFailed}})
+	m = updated.(Model)
+	if m.state != StateBackupResult || cmd != nil {
+		t.Fatalf("completion state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, cmd = m.Update(tick)
+	if updated.(Model).state != StateBackupResult || cmd != nil {
+		t.Fatalf("spinner continued after completion: state/cmd = %v/%v", updated.(Model).state, cmd)
 	}
 }
 
@@ -249,9 +290,14 @@ func TestMigrationRunningPreventsDuplicateSubmitAndCancels(t *testing.T) {
 	if updated.(Model).state != StateBackupRunning || cmd != nil {
 		t.Fatal("running backup must ignore duplicate confirmation")
 	}
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cancelled != 1 || cmd != nil {
 		t.Fatalf("cancellation = %d, cmd=%v", cancelled, cmd)
+	}
+	m = updated.(Model)
+	updated, cmd = m.Update(m.backupSpinner.Tick())
+	if !updated.(Model).backupCancelling || cmd != nil {
+		t.Fatalf("spinner continued after cancellation: cancelling/cmd = %t/%v", updated.(Model).backupCancelling, cmd)
 	}
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cancelled != 2 || cmd != nil {
