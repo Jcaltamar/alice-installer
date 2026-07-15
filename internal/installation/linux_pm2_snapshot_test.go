@@ -2,7 +2,9 @@ package installation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 )
 
@@ -44,6 +46,92 @@ func TestLinuxPM2SnapshotProvider(t *testing.T) {
 	if _, err := snapshotProvider(record, identity).Snapshot(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled Snapshot() error = %v, want context.Canceled", err)
 	}
+}
+
+func TestLinuxPM2SnapshotProviderValidatesStatusAwareProcessIdentity(t *testing.T) {
+	online := PM2Record{ID: 1, PID: 41, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}
+	stopped := PM2Record{ID: 2, PID: 0, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "stopped"}
+	reads := 0
+	provider := LinuxPM2SnapshotProvider{
+		Inventory: pm2InventoryFunc(func(context.Context) ([]PM2Record, error) { return []PM2Record{online, stopped}, nil }),
+		Sockets:   socketSnapshotFunc(func(context.Context) ([]SocketOwner, error) { return nil, nil }),
+		Proc: procIdentityFunc(func(_ context.Context, pid int) (ProcIdentity, error) {
+			reads++
+			if pid != online.PID {
+				t.Fatalf("proc read PID = %d, want only online PID %d", pid, online.PID)
+			}
+			return ProcIdentity{CWD: online.CWD, ExecPath: "/usr/local/bin/node", StartTicks: 9}, nil
+		}),
+	}
+	snapshot, err := provider.Snapshot(context.Background())
+	if err != nil || reads != 1 || len(snapshot.Proc) != 1 {
+		t.Fatalf("Snapshot() = %#v, %v; proc reads = %d", snapshot, err, reads)
+	}
+	if _, exists := snapshot.Proc[0]; exists {
+		t.Fatal("zero PID inserted into process identity map")
+	}
+
+	for _, records := range [][]PM2Record{
+		{{ID: 1, PID: 0, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}},
+		{{ID: 1, PID: 41, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "stopped"}},
+		{{ID: 1, PID: -1, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "stopped"}},
+		{{ID: 1, PID: 41, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "launching"}},
+		{{ID: 1, PID: 41, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}, {ID: 2, PID: 41, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "online"}},
+		{{ID: 1, PID: 0, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "stopped"}, {ID: 1, PID: 0, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "stopped"}},
+	} {
+		provider.Inventory = pm2InventoryFunc(func(context.Context) ([]PM2Record, error) { return records, nil })
+		if _, err := provider.Snapshot(context.Background()); err == nil {
+			t.Fatalf("unsafe records accepted: %#v", records)
+		}
+	}
+}
+
+func TestPM2QuiescerAcceptsStoppedZeroPIDLifecycle(t *testing.T) {
+	runner := &pm2LifecycleRunner{}
+	provider := LinuxPM2SnapshotProvider{
+		Inventory: LinuxPM2Inventory{Runner: runner},
+		Sockets: socketSnapshotFunc(func(context.Context) ([]SocketOwner, error) {
+			if runner.stopped {
+				return nil, nil
+			}
+			return []SocketOwner{{PID: 41, Port: 8080}}, nil
+		}),
+		Proc: procIdentityFunc(func(_ context.Context, pid int) (ProcIdentity, error) {
+			if pid != 41 {
+				return ProcIdentity{}, errors.New("unexpected proc read")
+			}
+			return ProcIdentity{CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 9}, nil
+		}),
+	}
+	stopped, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: runner}}).Quiesce(context.Background())
+	if err != nil || len(stopped.Evidence) != 1 || !stopped.Evidence[0].StopVerified || runner.stopCalls != 1 {
+		t.Fatalf("Quiesce() = %#v, %v; stop calls = %d", stopped, err, runner.stopCalls)
+	}
+}
+
+type pm2LifecycleRunner struct {
+	stopped   bool
+	stopCalls int
+}
+
+func (r *pm2LifecycleRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	if name != "pm2" {
+		return nil, nil, errors.New("unexpected command")
+	}
+	if len(args) == 1 && args[0] == "jlist" {
+		pid, status := 41, "online"
+		if r.stopped {
+			pid, status = 0, "stopped"
+		}
+		output, _ := json.Marshal([]map[string]any{{"pm_id": 1, "pid": pid, "name": "front-guardian", "pm_exec_path": "/usr/bin/bash", "pm2_env": map[string]any{"cwd": guardianRoot, "status": status}}})
+		return output, nil, nil
+	}
+	if len(args) == 2 && args[0] == "stop" && args[1] == strconv.Itoa(1) {
+		r.stopCalls++
+		r.stopped = true
+		return nil, nil, nil
+	}
+	return nil, nil, errors.New("unexpected pm2 command")
 }
 
 func snapshotProvider(record PM2Record, identity ProcIdentity) LinuxPM2SnapshotProvider {
