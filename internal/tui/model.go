@@ -191,6 +191,7 @@ func portsConfigFromMap(ports map[string]int) envgen.PortsConfig {
 		WebRTCICEPort:    ports["WEBRTC_ICE_PORT"],
 		RTMPPort:         ports["RTMP_PORT"],
 		MilvusPort:       ports["MILVUS_PORT"],
+		MilvusWebPort:    ports["MILVUS_WEB_PORT"],
 		MinioAPIPort:     ports["MINIO_API_PORT"],
 		MinioConsolePort: ports["MINIO_CONSOLE_PORT"],
 	}
@@ -229,7 +230,7 @@ func NewModel(deps Dependencies) Model {
 func (m *Model) applyMigrationPortPolicy() {
 	var exemptTCP, exemptUDP map[int]struct{}
 	if m.hasLiveMigrationLease() {
-		exemptTCP, exemptUDP = ports.MigrationRTSPExemptions()
+		exemptTCP, exemptUDP = ports.MigrationPortExemptions()
 	}
 	m.deps.PreflightCoordinator.ExemptTCPPorts = exemptTCP
 	m.deps.PreflightCoordinator.ExemptUDPPorts = exemptUDP

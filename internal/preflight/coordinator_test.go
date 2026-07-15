@@ -235,34 +235,34 @@ func TestCoordinator_PortsOccupied_Warn(t *testing.T) {
 	}
 }
 
-func TestCoordinator_MigrationRTSPPortExemptions(t *testing.T) {
+func TestCoordinator_MigrationPortExemptions(t *testing.T) {
 	t.Parallel()
-	tcpExempt, udpExempt := ports.MigrationRTSPExemptions()
+	tcpExempt, udpExempt := ports.MigrationPortExemptions()
 	c := happyCoordinator()
-	c.RequiredTCPPorts = []int{6379, 8554, 1935, 8888, 8889, 9090}
+	c.RequiredTCPPorts = []int{6379, 8554, 1935, 8888, 8889, 19530, 9091, 9000, 9001, 9090}
 	c.RequiredUDPPorts = []int{8890, 8189}
 	c.Ports = &ports.FakePortScanner{
-		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889},
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889, 19530, 9091, 9000, 9001},
 		OccupiedUDPPorts: []int{8890, 8189},
 	}
 	normal := findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
-	if normal.Status != preflight.StatusWarn || !strings.Contains(normal.Detail, "UDP 8890") || !strings.Contains(normal.Detail, "UDP 8189") {
-		t.Fatalf("normal RTSP conflicts = %v %q, want WARN with UDP protocol", normal.Status, normal.Detail)
+	if normal.Status != preflight.StatusWarn || !strings.Contains(normal.Detail, "TCP 19530") || !strings.Contains(normal.Detail, "TCP 9091") || !strings.Contains(normal.Detail, "TCP 9000") || !strings.Contains(normal.Detail, "TCP 9001") || !strings.Contains(normal.Detail, "UDP 8890") || !strings.Contains(normal.Detail, "UDP 8189") {
+		t.Fatalf("normal migration-port conflicts = %v %q, want WARN with UDP protocol", normal.Status, normal.Detail)
 	}
 	c.ExemptTCPPorts, c.ExemptUDPPorts = tcpExempt, udpExempt
 
 	result := findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
 	if result.Status != preflight.StatusPass {
-		t.Fatalf("migration RTSP ports status = %v, want PASS: %s", result.Status, result.Detail)
+		t.Fatalf("migration ports status = %v, want PASS: %s", result.Status, result.Detail)
 	}
 
 	c.Ports = &ports.FakePortScanner{
-		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889, 9090},
+		OccupiedTCPPorts: []int{6379, 8554, 1935, 8888, 8889, 19530, 9091, 9000, 9001, 9090},
 		OccupiedUDPPorts: []int{8890, 8189},
 	}
 	result = findCheck(t, c.Run(context.Background()), preflight.CheckPortsAvailable)
 	if result.Status != preflight.StatusWarn || !strings.Contains(result.Detail, "TCP 9090") {
-		t.Fatalf("non-RTSP migration conflict = %v %q, want WARN for TCP 9090", result.Status, result.Detail)
+		t.Fatalf("non-exempt migration conflict = %v %q, want WARN for TCP 9090", result.Status, result.Detail)
 	}
 }
 

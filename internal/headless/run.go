@@ -416,6 +416,7 @@ func portsConfigFromMap(p map[string]int) envgen.PortsConfig {
 		WebRTCICEPort:    p["WEBRTC_ICE_PORT"],
 		RTMPPort:         p["RTMP_PORT"],
 		MilvusPort:       p["MILVUS_PORT"],
+		MilvusWebPort:    p["MILVUS_WEB_PORT"],
 		MinioAPIPort:     p["MINIO_API_PORT"],
 		MinioConsolePort: p["MINIO_CONSOLE_PORT"],
 	}
