@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -58,7 +59,7 @@ func TestCredentialTransportAndHelperDumpSpecKeepSecretOutsideObservableBoundary
 		"run", "--rm", "--pull=never", "--name", run.Name, "--label", HelperCleanupLabel + "=true", "--label", HelperOperationLabel + "=" + run.OperationID,
 		"--network", "host", "--mount", "type=bind,src=" + credential.HostPath() + ",dst=" + ContainerPGPassPath + ",readonly",
 		"--env", "PGPASSFILE=" + ContainerPGPassPath, "--user", fmt.Sprintf("%d:%d", credential.ownerUID, credential.ownerGID), string(PostgreSQL11Image),
-		"pg_dump", "--format=custom", "--file=-", "--no-password", "--host=" + config.Host,
+		"pg_dump", "--format=custom", "--no-password", "--host=" + config.Host,
 		"--port=5432", "--username=" + config.Username, "--dbname=" + config.Database,
 	}
 	if !equalStrings(run.Spec.Args, wantArgs) {
@@ -68,6 +69,39 @@ func TestCredentialTransportAndHelperDumpSpecKeepSecretOutsideObservableBoundary
 		t.Fatalf("cleanup spec = %#v", got)
 	}
 	assertNoProcessLeak(t, run, run.Spec, run.CleanupSpec())
+}
+
+func TestHelperDumpStreamsCustomArchiveToStdout(t *testing.T) {
+	config := testProcessConfig(processSecretSentinel)
+	credential, err := (CredentialTransport{TempRoot: t.TempDir()}).Prepare(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Cleanup()
+
+	run, err := BuildHelperDump(HelperDumpRequest{
+		GOOS:       "linux",
+		Container:  ContainerIdentity{ID: strings.Repeat("a", 64), Image: PostgreSQL11Image},
+		Config:     config,
+		Credential: credential,
+	})
+	if err != nil {
+		t.Fatalf("BuildHelperDump() error = %v", err)
+	}
+
+	pgDumpIndex := slices.Index(run.Spec.Args, "pg_dump")
+	if pgDumpIndex < 0 {
+		t.Fatalf("helper args do not invoke pg_dump: %#v", run.Spec.Args)
+	}
+	pgDumpArgs := run.Spec.Args[pgDumpIndex+1:]
+	if !slices.Contains(pgDumpArgs, "--format=custom") {
+		t.Fatalf("pg_dump args do not preserve custom format: %#v", pgDumpArgs)
+	}
+	for _, arg := range pgDumpArgs {
+		if arg == "--file" || strings.HasPrefix(arg, "--file=") || arg == "-f" || strings.HasPrefix(arg, "-f") {
+			t.Fatalf("pg_dump output-file argument prevents stdout streaming: %q in %#v", arg, pgDumpArgs)
+		}
+	}
 }
 
 func TestHelperDumpRejectsUnpinnedImageUnsafeMountAndInvalidInputs(t *testing.T) {

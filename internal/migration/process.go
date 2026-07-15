@@ -125,7 +125,7 @@ func BuildHelperDump(request HelperDumpRequest) (HelperRun, error) {
 		"--label", HelperCleanupLabel + "=true", "--label", HelperOperationLabel + "=" + id,
 		"--network", "host", "--mount", mount, "--env", "PGPASSFILE=" + ContainerPGPassPath,
 		"--user", fmt.Sprintf("%d:%d", request.Credential.ownerUID, request.Credential.ownerGID),
-		string(PostgreSQL11Image), "pg_dump", "--format=custom", "--file=-", "--no-password",
+		string(PostgreSQL11Image), "pg_dump", "--format=custom", "--no-password",
 		"--host=" + request.Config.Host, fmt.Sprintf("--port=%d", request.Config.Port), "--username=" + request.Config.Username, "--dbname=" + request.Config.Database,
 	}, Timeout: timeout}}, nil
 }
