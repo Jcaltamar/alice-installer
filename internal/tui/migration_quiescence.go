@@ -157,6 +157,11 @@ func (m Model) migrationTerminalView() string {
 			operation = "stopped-and-released"
 			command = fmt.Sprintf("sudo -n pm2 stop %d", diagnostic.PMID)
 			cause = diagnostic.String()
+		} else if diagnostic.RecoveryProofTimedOut || diagnostic.RecoveryProofCancelled {
+			stage = "recovery-proof"
+			operation = "online-port-proc"
+			command = fmt.Sprintf("sudo -n pm2 start %d", diagnostic.PMID)
+			cause = diagnostic.String()
 		}
 		message.WriteString("\nDebug:\n")
 		for _, field := range []struct{ label, value string }{{"Stage", stage}, {"Operation", operation}, {"Command", command}, {"Cause", cause}} {

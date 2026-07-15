@@ -455,6 +455,34 @@ func TestMigrationRecoveryPanicBecomesBoundedTerminalResult(t *testing.T) {
 	}
 }
 
+func TestMigrationRecoveryDiagnosticRespectsDebugMode(t *testing.T) {
+	const secret = "DATABASE_URL=postgres://secret"
+	for _, debug := range []bool{false, true} {
+		deps := buildTestDeps()
+		deps.Debug = debug
+		m := NewModel(deps)
+		m.state = StateMigrationRecovery
+		diagnostic := &installation.PM2ObservationDiagnostic{RecoveryProofTimedOut: true, PMID: 3, Port: 9090, Stderr: secret}
+		updated, _ := m.Update(MigrationRecoveryCompletedMsg{Recovery: installation.PM2Recovery{Attempted: 1, Diagnostic: diagnostic}, Err: errors.New("pm2 recovery was not proven")})
+		view := updated.(Model).View()
+		if !strings.Contains(view, "Recovery status: pm2-recovery-unproven") {
+			t.Fatalf("view missing recovery status: %q", view)
+		}
+		if debug {
+			for _, want := range []string{"Debug:", "Stage: recovery-proof", "Operation: online-port-proc", "Cause: recovery command succeeded", "PM2 ID 3", "port 9090"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("debug view %q missing %q", view, want)
+				}
+			}
+		} else if strings.Contains(view, "Debug:") {
+			t.Fatalf("normal mode exposed diagnostic: %q", view)
+		}
+		if strings.Contains(view, secret) || strings.Contains(view, "postgres://secret") {
+			t.Fatalf("view leaked secret: %q", view)
+		}
+	}
+}
+
 type panicFailureHandoff struct{}
 
 func (panicFailureHandoff) Begin(context.Context, migration.BackupRef, string, migration.ContainerDisposition) (*migration.PreInstallMigrationLease, error) {

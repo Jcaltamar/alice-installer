@@ -523,6 +523,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.migrationPending = false
 		m.applyMigrationPortPolicy()
 		m.migrationRecoveryCode = boundedRecoveryCode(msg.Recovery, msg.Err)
+		m.migrationDiagnostic = nil
+		if m.deps.Debug && msg.Recovery.Diagnostic != nil {
+			diagnostic := *msg.Recovery.Diagnostic
+			m.migrationDiagnostic = &diagnostic
+		}
 		m.state = StateMigrationResult
 		return m, nil
 

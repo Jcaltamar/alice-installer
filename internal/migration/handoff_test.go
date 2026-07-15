@@ -6,6 +6,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreInstallMigrationCoordinatorBeginRequiresBackupCompleteQuiescenceAndCompensatesPartialStop(t *testing.T) {
@@ -54,8 +55,24 @@ func TestPreInstallMigrationCoordinatorCompletionConsumesLeaseOnce(t *testing.T)
 	if _, err := coordinator.CompleteFailure(failure); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coordinator.CompleteFailure(failure); err != nil || quiescer.recoverCalls != 1 || contexts != 1 {
+	if _, err := coordinator.CompleteFailure(failure); err != nil || quiescer.recoverCalls != 1 || contexts != 2 {
 		t.Fatalf("duplicate failure err = %v, recoveries = %d, contexts = %d", err, quiescer.recoverCalls, contexts)
+	}
+}
+
+func TestCompleteFailureGivesPM2IndependentRecoveryBudget(t *testing.T) {
+	quiescer := &handoffQuiescer{stopped: acknowledgedQuiescence(), requireBudget: 15 * time.Millisecond}
+	container := &handoffContainer{consumeContext: true}
+	coordinator := PreInstallMigrationCoordinator{Legacy: &handoffBackup{}, PM2: quiescer, Container: container, RecoveryContext: func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 20*time.Millisecond)
+	}}
+	lease, err := coordinator.Begin(context.Background(), BackupRef{}, strings.Repeat("a", 64), DispositionStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := coordinator.CompleteFailure(lease)
+	if err == nil || !recovery.Verified || quiescer.recoverCalls != 1 {
+		t.Fatalf("recovery = %#v, calls = %d, err = %v", recovery, quiescer.recoverCalls, err)
 	}
 }
 func acknowledgedQuiescence() installation.PM2Quiescence {
@@ -75,10 +92,11 @@ func (b *handoffBackup) Revalidate(context.Context, BackupRef) (ValidatedBackup,
 }
 
 type handoffQuiescer struct {
-	events       *[]string
-	stopped      installation.PM2Quiescence
-	recoverCalls int
-	err          error
+	events        *[]string
+	stopped       installation.PM2Quiescence
+	recoverCalls  int
+	err           error
+	requireBudget time.Duration
 }
 
 type handoffContainer struct {
@@ -87,6 +105,7 @@ type handoffContainer struct {
 	applyErr       error
 	recoveryResult ContainerDispositionResult
 	recoveryErr    error
+	consumeContext bool
 }
 
 func (c *handoffContainer) Apply(_ context.Context, _ string, disposition ContainerDisposition) (ContainerDispositionResult, error) {
@@ -99,12 +118,16 @@ func (c *handoffContainer) Apply(_ context.Context, _ string, disposition Contai
 	return ContainerDispositionResult{Verified: true}, nil
 }
 
-func (c *handoffContainer) Recover(_ context.Context, _ string, disposition ContainerDisposition) (ContainerDispositionResult, error) {
+func (c *handoffContainer) Recover(ctx context.Context, _ string, disposition ContainerDisposition) (ContainerDispositionResult, error) {
 	if c.events != nil {
 		*c.events = append(*c.events, "container-recover")
 	}
 	if c.recoveryErr != nil || c.recoveryResult.Code != "" {
 		return c.recoveryResult, c.recoveryErr
+	}
+	if c.consumeContext {
+		<-ctx.Done()
+		return ContainerDispositionResult{Code: DispositionRecoveryUnprovenCode}, errors.New("container recovery timed out")
 	}
 	if disposition == DispositionRemove {
 		return ContainerDispositionResult{Code: DispositionManualRecoveryCode}, nil
@@ -123,6 +146,9 @@ func (q *handoffQuiescer) Recover(ctx context.Context, _ installation.PM2Quiesce
 		return installation.PM2Recovery{}, errors.New("recovery context is unbounded")
 	}
 	q.recoverCalls++
+	if deadline, ok := ctx.Deadline(); q.requireBudget > 0 && (!ok || time.Until(deadline) < q.requireBudget) {
+		return installation.PM2Recovery{}, errors.New("PM2 recovery budget was consumed")
+	}
 	if q.events != nil {
 		*q.events = append(*q.events, "pm2-recover")
 	}
