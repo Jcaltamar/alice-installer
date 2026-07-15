@@ -15,7 +15,14 @@ func (b RootPM2Boundary) Run(ctx context.Context, name string, args ...string) (
 	if b.Runner == nil || !allowedRootObservation(name, args) {
 		return nil, nil, errors.New("root PM2 command rejected")
 	}
-	return b.Runner.Run(ctx, "sudo", append([]string{"-n", name}, args...)...)
+	stdout, stderr, err := b.Runner.Run(ctx, "sudo", append([]string{"-n", name}, args...)...)
+	if err == nil {
+		return stdout, stderr, nil
+	}
+	if name == "pm2" {
+		return nil, nil, observationCommandError(ctx, "pm2-jlist", "sudo -n pm2 jlist", stderr, err)
+	}
+	return nil, nil, observationCommandError(ctx, "socket-listeners", "sudo -n ss -H -ltnp", stderr, err)
 }
 
 func allowedRootObservation(name string, args []string) bool {
@@ -28,16 +35,19 @@ func (b RootPM2Boundary) Read(ctx context.Context, pid int) (ProcIdentity, error
 		return ProcIdentity{}, errors.New("root proc read rejected")
 	}
 	base := "/proc/" + strconv.Itoa(pid) + "/"
-	cwd, err := b.read(ctx, "readlink", base+"cwd")
+	cwd, err := b.read(ctx, "proc-cwd", "readlink", base+"cwd")
 	if err != nil {
-		return ProcIdentity{}, errors.New("proc cwd is unavailable")
+		return ProcIdentity{}, wrapObservationUnavailable("proc cwd is unavailable", err)
 	}
-	exe, err := b.read(ctx, "readlink", base+"exe")
+	exe, err := b.read(ctx, "proc-exe", "readlink", base+"exe")
 	if err != nil {
-		return ProcIdentity{}, errors.New("proc executable is unavailable")
+		return ProcIdentity{}, wrapObservationUnavailable("proc executable is unavailable", err)
 	}
-	stat, err := b.read(ctx, "cat", base+"stat")
-	if err != nil || len(stat) > defaultProcStatLimit {
+	stat, err := b.read(ctx, "proc-stat", "cat", base+"stat")
+	if err != nil {
+		return ProcIdentity{}, wrapObservationUnavailable("proc stat is unavailable", err)
+	}
+	if len(stat) > defaultProcStatLimit {
 		return ProcIdentity{}, errors.New("proc stat is unavailable")
 	}
 	ticks, err := ParseProcStartTicks(stat)
@@ -51,12 +61,16 @@ func (b RootPM2Boundary) Read(ctx context.Context, pid int) (ProcIdentity, error
 	return ProcIdentity{CWD: filepath.Clean(cwdPath), ExecPath: filepath.Clean(exePath), StartTicks: ticks}, nil
 }
 
-func (b RootPM2Boundary) read(ctx context.Context, executable, path string) ([]byte, error) {
+func (b RootPM2Boundary) read(ctx context.Context, operation, executable, path string) ([]byte, error) {
 	if !validProcPath(path) || executable != "readlink" && executable != "cat" || executable == "cat" && !strings.HasSuffix(path, "/stat") {
 		return nil, errors.New("root proc read rejected")
 	}
-	out, _, err := b.Runner.Run(ctx, "sudo", "-n", executable, path)
-	return []byte(strings.TrimSpace(string(out))), err
+	out, stderr, err := b.Runner.Run(ctx, "sudo", "-n", executable, path)
+	if err != nil {
+		pid, _ := strconv.Atoi(strings.Split(path, "/")[2])
+		return nil, observationCommandError(ctx, operation, procObservationCommand(operation, pid), stderr, err)
+	}
+	return []byte(strings.TrimSpace(string(out))), nil
 }
 
 func validProcPath(path string) bool {

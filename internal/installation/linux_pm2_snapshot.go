@@ -3,6 +3,7 @@ package installation
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 type pm2InventorySnapshot interface {
@@ -32,14 +33,14 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 	}
 	records, err := p.Inventory.Snapshot(ctx)
 	if err != nil {
-		return PM2Snapshot{}, errors.New("pm2 inventory is unavailable")
+		return PM2Snapshot{}, fmt.Errorf("pm2 inventory is unavailable: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return PM2Snapshot{}, err
 	}
 	sockets, err := p.Sockets.Snapshot(ctx)
 	if err != nil {
-		return PM2Snapshot{}, errors.New("socket ownership is unavailable")
+		return PM2Snapshot{}, fmt.Errorf("socket ownership is unavailable: %w", err)
 	}
 	proc := make(map[int]ProcIdentity, len(records))
 	for _, record := range records {
@@ -53,7 +54,10 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 			return PM2Snapshot{}, errors.New("pm2 process identity is ambiguous")
 		}
 		identity, err := p.Proc.Read(ctx, record.PID)
-		if err != nil || identity.CWD == "" || identity.ExecPath == "" || identity.StartTicks == 0 {
+		if err != nil {
+			return PM2Snapshot{}, fmt.Errorf("proc identity is unavailable: %w", err)
+		}
+		if identity.CWD == "" || identity.ExecPath == "" || identity.StartTicks == 0 {
 			return PM2Snapshot{}, errors.New("proc identity is unavailable")
 		}
 		if !samePath(record.CWD, identity.CWD) {

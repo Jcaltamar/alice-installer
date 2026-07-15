@@ -22,6 +22,24 @@ type fakeMigrationHandoff struct {
 	lastBackupRef migration.BackupRef
 }
 
+type failingRootObservationRunner struct{}
+
+func (failingRootObservationRunner) Run(context.Context, string, ...string) ([]byte, []byte, error) {
+	return []byte(`[{"pm2_env":{"DATABASE_URL":"postgres://secret"}}]`), []byte("sudo: a password is required\n"), errors.New("exit status 1")
+}
+
+type unusedSocketSnapshot struct{}
+
+func (unusedSocketSnapshot) Snapshot(context.Context) ([]installation.SocketOwner, error) {
+	return nil, nil
+}
+
+type unusedProcIdentity struct{}
+
+func (unusedProcIdentity) Read(context.Context, int) (installation.ProcIdentity, error) {
+	return installation.ProcIdentity{}, nil
+}
+
 func (h *fakeMigrationHandoff) Begin(_ context.Context, ref migration.BackupRef, _ string, _ migration.ContainerDisposition) (*migration.PreInstallMigrationLease, error) {
 	h.beginCalls++
 	h.lastBackupRef = ref
@@ -126,6 +144,44 @@ func TestMigrationQuiescenceFailureBlocksBeforePreflight(t *testing.T) {
 	m = updated.(Model)
 	if m.state != StateMigrationResult || m.migrationPending || m.migrationLease != nil || cmd != nil {
 		t.Fatalf("failed acquisition state/pending/lease/cmd = %v/%t/%t/%v", m.state, m.migrationPending, m.migrationLease != nil, cmd)
+	}
+}
+
+func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
+	root := installation.RootPM2Boundary{Runner: failingRootObservationRunner{}}
+	quiescer := installation.PM2Quiescer{
+		Snapshots: installation.LinuxPM2SnapshotProvider{
+			Inventory: installation.LinuxPM2Inventory{Runner: root},
+			Sockets:   unusedSocketSnapshot{},
+			Proc:      unusedProcIdentity{},
+		},
+		Controller: installation.PM2Controller{Runner: root},
+	}
+	_, err := quiescer.Quiesce(context.Background())
+	if err == nil {
+		t.Fatal("Quiesce() succeeded, want observation failure")
+	}
+
+	m := NewModel(buildTestDeps())
+	m.state = StateMigrationQuiescence
+	updated, _ := m.Update(MigrationQuiescenceCompletedMsg{Err: err})
+	view := updated.(Model).View()
+	for _, want := range []string{
+		"pm2-observation-unavailable",
+		"stage=initial-snapshot",
+		"operation=pm2-jlist",
+		"command=sudo -n pm2 jlist",
+		"cause=exit-1",
+		"stderr=sudo authentication required",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("terminal view %q does not contain %q", view, want)
+		}
+	}
+	for _, forbidden := range []string{"DATABASE_URL", "postgres://secret", "pm2_env"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("terminal view leaked %q: %q", forbidden, view)
+		}
 	}
 }
 
