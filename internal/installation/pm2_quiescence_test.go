@@ -81,10 +81,14 @@ func TestLinuxPM2InventoryRejectsCompletedOutputAfterTimeout(t *testing.T) {
 	}
 }
 func TestPM2InventoryRejectsInvalidOrPartialRecords(t *testing.T) {
-	for _, input := range []string{`[{"pm_id":1,"pid":0,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}}]`, `[{"pm_id":1,"pid":10,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}},{"pm_id":1,"pid":11,"name":"b","pm_exec_path":"/b","pm2_env":{"cwd":"/b","status":"online"}}]`, `[{"pm_id":1,"pid":10,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}},{}]`} {
+	for _, input := range []string{`[{"pm_id":1,"pid":0,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}}]`, `[{"pm_id":1,"pid":-1,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"stopped"}}]`, `[{"pm_id":1,"pid":10,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"stopped"}}]`, `[{"pm_id":1,"pid":0,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"launching"}}]`, `[{"pm_id":1,"pid":10,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}},{"pm_id":1,"pid":11,"name":"b","pm_exec_path":"/b","pm2_env":{"cwd":"/b","status":"online"}}]`, `[{"pm_id":1,"pid":10,"name":"a","pm_exec_path":"/a","pm2_env":{"cwd":"/a","status":"online"}},{}]`} {
 		if _, err := ParsePM2Inventory([]byte(input)); err == nil {
 			t.Fatal("unsafe inventory accepted")
 		}
+	}
+	stopped := []byte(`[{"pm_id":1,"pid":0,"name":"front-guardian","pm_exec_path":"/usr/bin/bash","pm2_env":{"cwd":"/opt/alice-guardian","status":"stopped"}},{"pm_id":2,"pid":0,"name":"node","pm_exec_path":"/opt/backend_alice_guardian/node/bin/www","pm2_env":{"cwd":"/opt/backend_alice_guardian/node","status":"stopped"}}]`)
+	if records, err := ParsePM2Inventory(stopped); err != nil || len(records) != 2 || records[0].PID != 0 || records[1].PID != 0 {
+		t.Fatalf("stopped records = %#v, %v; want canonical zero PIDs", records, err)
 	}
 	if owners, err := ParseSocketSnapshot([]byte("LISTEN 0 0 *:8080 *:* users:((\"node\",pid=12,fd=1))\n")); err != nil || len(owners) != 1 || owners[0].PID != 12 {
 		t.Fatal("valid socket evidence rejected")
@@ -173,9 +177,9 @@ func TestCorrelatePM2SelectsExactContractWhenPIDOwnsMultipleApprovedPorts(t *tes
 func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
 	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}, {ID: 2, PID: 22, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}, {PID: 22, Port: 9090}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 9}, 22: {CWD: backendRoot + "/node", ExecPath: "/usr/local/bin/node", StartTicks: 10}}}
 	afterOne := PM2Snapshot{Records: append([]PM2Record(nil), before.Records...), Sockets: []SocketOwner{{PID: 22, Port: 9090}}, Proc: before.Proc}
-	afterOne.Records[0].Status = "stopped"
+	afterOne.Records[0].PID, afterOne.Records[0].Status = 0, "stopped"
 	afterAll := PM2Snapshot{Records: append([]PM2Record(nil), afterOne.Records...), Proc: before.Proc}
-	afterAll.Records[1].Status = "stopped"
+	afterAll.Records[1].PID, afterAll.Records[1].Status = 0, "stopped"
 	run := func(final PM2Snapshot) (PM2Quiescence, error, *recoveryRunner) {
 		runner := &recoveryRunner{}
 		stopped, err := (PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{before, before, afterOne, afterOne, afterAll, final}}, Controller: PM2Controller{Runner: runner}}).Quiesce(context.Background())
@@ -195,7 +199,7 @@ func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
 func TestPM2QuiescerWaitsForDelayedPortRelease(t *testing.T) {
 	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 9}}}
 	lingering := PM2Snapshot{Records: append([]PM2Record(nil), before.Records...), Sockets: before.Sockets, Proc: before.Proc}
-	lingering.Records[0].Status = "stopped"
+	lingering.Records[0].PID, lingering.Records[0].Status = 0, "stopped"
 	released := PM2Snapshot{Records: append([]PM2Record(nil), lingering.Records...), Proc: before.Proc}
 	runner := &recoveryRunner{}
 
@@ -361,6 +365,9 @@ func TestPM2QuiescerRecoverRejectsUnsafeRecoveryBoundaries(t *testing.T) {
 	assertUnsafe("restarted runtime drift", []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20), runtimeDrift}, &recoveryRunner{}, 1)
 }
 func recoverySnapshot(identity PM2ProcessIdentity, status string, pid int, ticks uint64) PM2Snapshot {
+	if status == "stopped" {
+		pid = 0
+	}
 	snapshot := PM2Snapshot{Records: []PM2Record{{ID: identity.PMID, PID: pid, Name: identity.Name, CWD: identity.CWD, ExecPath: identity.ExecPath, Status: status}}}
 	if status == "online" {
 		snapshot.Sockets = []SocketOwner{{PID: pid, Port: identity.Port}}

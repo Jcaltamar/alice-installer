@@ -155,6 +155,9 @@ func ParsePM2Inventory(data []byte) ([]PM2Record, error) {
 		if cwd == "" {
 			cwd = item.Env.PMCWD
 		}
+		if item.PID < 0 || item.Env.PID < 0 {
+			return nil, errors.New("pm2 inventory is ambiguous")
+		}
 		pid := item.PID
 		if item.PID > 0 && item.Env.PID > 0 && item.PID != item.Env.PID {
 			return nil, errors.New("pm2 inventory is ambiguous")
@@ -169,10 +172,23 @@ func ParsePM2Inventory(data []byte) ([]PM2Record, error) {
 		if execPath == "" {
 			execPath = item.Env.Exec
 		}
-		if item.ID < 0 || pid <= 0 || item.Name == "" || cwd == "" || execPath == "" || item.Env.Status == "" || seenIDs[item.ID] || seenPIDs[pid] {
+		if item.ID < 0 || item.Name == "" || cwd == "" || execPath == "" || seenIDs[item.ID] {
 			return nil, errors.New("pm2 inventory is ambiguous")
 		}
-		seenIDs[item.ID], seenPIDs[pid] = true, true
+		switch item.Env.Status {
+		case "online":
+			if pid <= 0 || seenPIDs[pid] {
+				return nil, errors.New("pm2 inventory is ambiguous")
+			}
+			seenPIDs[pid] = true
+		case "stopped":
+			if item.PID != 0 || item.Env.PID != 0 {
+				return nil, errors.New("pm2 inventory is ambiguous")
+			}
+		default:
+			return nil, errors.New("pm2 inventory is ambiguous")
+		}
+		seenIDs[item.ID] = true
 		records = append(records, PM2Record{ID: item.ID, PID: pid, Name: item.Name, CWD: filepath.Clean(cwd), ExecPath: filepath.Clean(execPath), Status: item.Env.Status})
 	}
 	return records, nil
@@ -470,7 +486,7 @@ func stoppedAndReleased(snapshot PM2Snapshot, targets ...PM2ProcessIdentity) boo
 		found := false
 		for _, record := range snapshot.Records {
 			if record.ID == target.PMID {
-				if found || record.Status != "stopped" || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
+				if found || record.Status != "stopped" || record.PID != 0 || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
 					return false
 				}
 				found = true

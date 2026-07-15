@@ -43,11 +43,22 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 		return PM2Snapshot{}, fmt.Errorf("socket ownership is unavailable: %w", err)
 	}
 	proc := make(map[int]ProcIdentity, len(records))
+	seenIDs := make(map[int64]bool, len(records))
 	for _, record := range records {
 		if err := ctx.Err(); err != nil {
 			return PM2Snapshot{}, err
 		}
-		if record.ID < 0 || record.PID <= 0 || record.CWD == "" || record.ExecPath == "" || record.Status == "" {
+		if record.ID < 0 || record.CWD == "" || record.ExecPath == "" || record.Name == "" || seenIDs[record.ID] {
+			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-record-incomplete")
+		}
+		seenIDs[record.ID] = true
+		if record.Status == "stopped" {
+			if record.PID != 0 {
+				return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-record-incomplete")
+			}
+			continue
+		}
+		if record.Status != "online" || record.PID <= 0 {
 			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-record-incomplete")
 		}
 		if _, duplicate := proc[record.PID]; duplicate {
