@@ -86,20 +86,47 @@ func TestPM2InventoryRejectsInvalidOrPartialRecords(t *testing.T) {
 		t.Fatal("invalid start ticks accepted")
 	}
 }
-func TestCorrelatePM2RequiresCanonicalRootAndPort(t *testing.T) {
-	records := []PM2Record{{ID: 2, PID: 22, Name: "backend", CWD: backendRoot + "/api", ExecPath: backendRoot + "/api/server", Status: "online"}, {ID: 1, PID: 11, Name: "guardian", CWD: guardianRoot, ExecPath: guardianRoot + "/app", Status: "online"}}
-	proc := map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: guardianRoot + "/app", StartTicks: 10}, 22: {CWD: backendRoot + "/api", ExecPath: backendRoot + "/api/server", StartTicks: 20}}
-	got, err := CorrelatePM2(records, []SocketOwner{{PID: 11, Port: 8080}, {PID: 22, Port: 9090}}, proc)
-	if err != nil || len(got) != 2 || got[0].PMID != 1 || got[1].Port != 9090 {
-		t.Fatalf("correlation = %#v, %v", got, err)
+func TestPM2InventoryAcceptsPMCWDButRejectsConflict(t *testing.T) {
+	valid := []byte(`[{"pm_id":1,"pid":1230,"name":"front-guardian","pm_exec_path":"/usr/bin/node","pm2_env":{"pm_cwd":"/opt/alice-guardian","status":"online"}}]`)
+	records, err := ParsePM2Inventory(valid)
+	if err != nil || len(records) != 1 || records[0].CWD != guardianRoot {
+		t.Fatalf("records = %#v, %v", records, err)
 	}
-	_, err = CorrelatePM2([]PM2Record{{ID: 3, PID: 33, CWD: guardianRoot + "-old", ExecPath: guardianRoot + "-old/app", Status: "online"}}, []SocketOwner{{PID: 33, Port: 8080}}, map[int]ProcIdentity{33: {CWD: guardianRoot + "-old", ExecPath: guardianRoot + "-old/app", StartTicks: 30}})
-	if err == nil {
-		t.Fatal("prefix collision qualified")
+	conflict := []byte(`[{"pm_id":1,"pid":1230,"name":"front-guardian","pm_exec_path":"/usr/bin/node","pm2_env":{"cwd":"/opt/alice-guardian","pm_cwd":"/opt/backend_alice_guardian","status":"online"}}]`)
+	if _, err := ParsePM2Inventory(conflict); err == nil {
+		t.Fatal("conflicting cwd fields accepted")
+	}
+}
+
+func TestCorrelatePM2SelectsOnlyProductionEligibleIdentities(t *testing.T) {
+	records := []PM2Record{
+		{ID: 0, PID: 20, Name: "pm2-logrotate", CWD: "/root/.pm2/modules/pm2-logrotate", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 1, PID: 1230, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 2, PID: 1231, Name: "ws", CWD: backendRoot + "/websocket", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 5, PID: 11174, Name: "node", CWD: backendRoot + "/node", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 3, PID: 30, Name: "queue", CWD: backendRoot + "/queue", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 4, PID: 40, Name: "frontend-tec", CWD: guardianRoot, ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 6, PID: 60, Name: "ws", CWD: backendRoot + "/node", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 7, PID: 70, Name: "node", CWD: backendRoot + "/node", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 8, PID: 80, Name: "front-guardian", CWD: guardianRoot + "-old", ExecPath: "/usr/bin/node", Status: "online"},
+		{ID: 9, PID: 90, Name: "other", CWD: guardianRoot, ExecPath: "/usr/bin/node", Status: "online"},
+	}
+	sockets := []SocketOwner{{1230, 8080}, {1231, 4550}, {11174, 9090}, {30, 4550}, {40, 8080}, {60, 4550}, {70, 4550}, {80, 8080}, {90, 8080}}
+	proc := map[int]ProcIdentity{}
+	for _, record := range records {
+		proc[record.PID] = ProcIdentity{CWD: record.CWD, ExecPath: record.ExecPath, StartTicks: uint64(record.PID)}
+	}
+	got, err := CorrelatePM2(records, sockets, proc)
+	if err != nil || len(got) != 3 || got[0].PMID != 1 || got[1].PMID != 2 || got[2].PMID != 5 {
+		t.Fatalf("selected = %#v, %v", got, err)
+	}
+	records[0].ID, records[1].ID = -1, 0
+	if got, err = CorrelatePM2(records, sockets, proc); err != nil || len(got) != 3 || got[0].PMID != 0 {
+		t.Fatalf("zero ID contract = %#v, %v", got, err)
 	}
 }
 func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
-	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "guardian", CWD: guardianRoot, ExecPath: guardianRoot + "/app", Status: "online"}, {ID: 2, PID: 22, Name: "backend", CWD: backendRoot, ExecPath: backendRoot + "/app", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}, {PID: 22, Port: 9090}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: guardianRoot + "/app", StartTicks: 9}, 22: {CWD: backendRoot, ExecPath: backendRoot + "/app", StartTicks: 10}}}
+	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "front-guardian", CWD: guardianRoot, ExecPath: guardianRoot + "/app", Status: "online"}, {ID: 2, PID: 22, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/app", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}, {PID: 22, Port: 9090}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: guardianRoot + "/app", StartTicks: 9}, 22: {CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/app", StartTicks: 10}}}
 	afterOne := PM2Snapshot{Records: append([]PM2Record(nil), before.Records...), Sockets: []SocketOwner{{PID: 22, Port: 9090}}, Proc: before.Proc}
 	afterOne.Records[0].Status = "stopped"
 	afterAll := PM2Snapshot{Records: append([]PM2Record(nil), afterOne.Records...), Proc: before.Proc}
@@ -121,8 +148,8 @@ func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
 	}
 }
 func TestPM2QuiescerRecoverUsesOnlyAcknowledgedIdentitiesInReverseStopOrder(t *testing.T) {
-	first, second := PM2ProcessIdentity{PMID: 1, PID: 11, CWD: guardianRoot, ExecPath: guardianRoot + "/app", Port: 8080, StartTicks: 10}, PM2ProcessIdentity{PMID: 2, PID: 22, CWD: backendRoot, ExecPath: backendRoot + "/app", Port: 9090, StartTicks: 20}
-	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{first, second}, Evidence: []PM2StoppedEvidence{{PMID: 1, OriginalPID: 11, Port: 8080, StartTicks: 10, StopVerified: true}, {PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
+	first, second := PM2ProcessIdentity{PMID: 0, PID: 11, CWD: guardianRoot, ExecPath: guardianRoot + "/app", Port: 8080, StartTicks: 10}, PM2ProcessIdentity{PMID: 2, PID: 22, CWD: backendRoot, ExecPath: backendRoot + "/app", Port: 9090, StartTicks: 20}
+	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{first, second}, Evidence: []PM2StoppedEvidence{{PMID: 0, OriginalPID: 11, Port: 8080, StartTicks: 10, StopVerified: true}, {PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
 	runner := &recoveryRunner{onRun: func() { stopped.Processes[0].PMID = 999 }}
 	q := PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{
 		recoverySnapshot(second, "stopped", 22, 20), recoverySnapshot(second, "online", 222, 200),
@@ -132,13 +159,17 @@ func TestPM2QuiescerRecoverUsesOnlyAcknowledgedIdentitiesInReverseStopOrder(t *t
 	if err != nil || !recovery.Verified || recovery.Attempted != 2 || recovery.Recovered != 2 {
 		t.Fatalf("recovery = %#v, %v", recovery, err)
 	}
-	if got, want := strings.Join(runner.commands, ","), "start:2,start:1"; got != want {
+	if got, want := strings.Join(runner.commands, ","), "start:2,start:0"; got != want {
 		t.Fatalf("start selectors = %q, want %q", got, want)
 	}
 }
 func TestPM2QuiescerRecoverRejectsUnsafeRecoveryBoundaries(t *testing.T) {
 	target := PM2ProcessIdentity{PMID: 2, PID: 22, CWD: backendRoot, ExecPath: backendRoot + "/app", Port: 9090, StartTicks: 20}
 	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{target}, Evidence: []PM2StoppedEvidence{{PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
+	zero := PM2ProcessIdentity{PMID: 0, PID: 10, CWD: guardianRoot, ExecPath: "/usr/bin/node", Port: 8080, StartTicks: 10}
+	if _, ok := acknowledgedRecoveryTargets(PM2Quiescence{Processes: []PM2ProcessIdentity{zero, zero}}); ok {
+		t.Fatal("duplicate zero PM2 ID accepted")
+	}
 	drift := recoverySnapshot(target, "stopped", 22, 20)
 	drift.Records[0].CWD = backendRoot + "/other"
 	competing := recoverySnapshot(target, "stopped", 22, 20)

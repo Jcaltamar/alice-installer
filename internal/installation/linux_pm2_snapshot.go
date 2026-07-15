@@ -46,7 +46,7 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 		if err := ctx.Err(); err != nil {
 			return PM2Snapshot{}, err
 		}
-		if record.ID <= 0 || record.PID <= 0 || record.CWD == "" || record.ExecPath == "" || record.Status == "" {
+		if record.ID < 0 || record.PID <= 0 || record.CWD == "" || record.ExecPath == "" || record.Status == "" {
 			return PM2Snapshot{}, errors.New("pm2 record is incomplete")
 		}
 		if _, duplicate := proc[record.PID]; duplicate {

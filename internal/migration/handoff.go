@@ -35,7 +35,7 @@ func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup Backu
 		if len(quiescence.Evidence) > 0 {
 			_, _ = c.recover(quiescence)
 		}
-		return nil, errors.New("pre-install migration quiescence is incomplete")
+		return nil, errors.Join(errors.New("pre-install migration quiescence is incomplete"), err)
 	}
 	if result, err := c.Container.Apply(ctx, containerID, disposition); err != nil || ctx.Err() != nil {
 		var containerErr error
