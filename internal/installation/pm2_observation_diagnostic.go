@@ -11,22 +11,32 @@ import (
 // PM2ObservationDiagnostic contains only reviewed, bounded operator context.
 // Command stdout is deliberately absent because pm2 jlist contains environment data.
 type PM2ObservationDiagnostic struct {
-	Stage     string
-	Operation string
-	Command   string
-	Cause     string
-	Stderr    string
+	Stage              string
+	Operation          string
+	Command            string
+	Cause              string
+	Stderr             string
+	StopProofTimedOut  bool
+	StopProofCancelled bool
+	PMID               int64
+	Port               uint16
 }
 
 func (d PM2ObservationDiagnostic) String() string {
+	if d.StopProofTimedOut {
+		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof timed out waiting for PM2 status stopped and port release on %d", d.PMID, d.Port)
+	}
+	if d.StopProofCancelled {
+		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof was cancelled before PM2 status stopped and port release on %d were proven", d.PMID, d.Port)
+	}
 	parts := []string{
 		"stage=" + d.Stage,
 		"operation=" + d.Operation,
 		"command=" + d.Command,
 		"cause=" + d.Cause,
 	}
-	if d.Stderr != "" {
-		parts = append(parts, "stderr="+d.Stderr)
+	if stderr := safeObservationStderr([]byte(d.Stderr)); stderr != "" {
+		parts = append(parts, "stderr="+stderr)
 	}
 	return strings.Join(parts, " ")
 }
@@ -81,9 +91,9 @@ func safeObservationStderr(stderr []byte) string {
 		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(string(stderr))) {
-	case "sudo: a password is required", "sudo: no tty present and no askpass program specified":
+	case "sudo: a password is required", "sudo: no tty present and no askpass program specified", "sudo authentication required":
 		return "sudo authentication required"
-	case "sudo: command not found":
+	case "sudo: command not found", "sudo command unavailable":
 		return "sudo command unavailable"
 	}
 	return ""

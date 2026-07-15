@@ -76,6 +76,7 @@ type TemplateAssets struct {
 type Dependencies struct {
 	Theme                  theme.Theme
 	Version                string
+	Debug                  bool
 	OS                     platform.OSGuard
 	Arch                   platform.ArchDetector
 	GPU                    platform.GPUDetector
@@ -490,7 +491,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil || msg.Lease == nil {
 			m.state = StateMigrationResult
 			m.migrationRecoveryCode = boundedQuiescenceCode(msg.Err)
-			m.migrationDiagnostic = boundedQuiescenceDiagnostic(msg.Err)
+			if m.deps.Debug {
+				m.migrationDiagnostic = boundedQuiescenceDiagnostic(msg.Err)
+			}
 			return m, nil
 		}
 		m.migrationLease = msg.Lease

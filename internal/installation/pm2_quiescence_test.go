@@ -200,12 +200,54 @@ func TestPM2QuiescerRecoversExactTargetAfterStopProofTimeout(t *testing.T) {
 	q := PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{before, before, lingering, recoverySnapshot(target, "stopped", target.PID, target.StartTicks), recoverySnapshot(target, "online", 111, 90)}}, Controller: PM2Controller{Runner: runner}, StopProofTimeout: time.Millisecond, StopProofInterval: 10 * time.Millisecond}
 
 	stopped, err := q.Quiesce(context.Background())
-	if errorText(err) != "pm2-stop-unproven" || len(stopped.Evidence) != 1 || stopped.Evidence[0].StopVerified {
+	var failure QuiescenceError
+	if !errors.As(err, &failure) || failure.Code != "pm2-stop-unproven" || len(stopped.Evidence) != 1 || stopped.Evidence[0].StopVerified {
 		t.Fatalf("stopped = %#v, err = %v", stopped, err)
 	}
 	recovery, err := q.Recover(context.Background(), stopped)
 	if err != nil || !recovery.Verified || recovery.Recovered != 1 || strings.Join(runner.commands, ",") != "stop:1,start:1" {
 		t.Fatalf("recovery = %#v, commands = %#v, err = %v", recovery, runner.commands, err)
+	}
+}
+
+func TestPM2QuiescerStopProofDiagnostic(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 1, Name: "front-guardian", PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 9}
+	before := recoverySnapshot(target, "online", target.PID, target.StartTicks)
+	secret := "DATABASE_URL=postgres://secret"
+
+	for _, tt := range []struct {
+		name      string
+		proof     PM2SnapshotProvider
+		want      []string
+		forbidden []string
+	}{
+		{
+			name:      "observation command failure",
+			proof:     &snapshotSequence{items: []PM2Snapshot{before, before, before}, errs: []error{nil, nil, observationCommandError(context.Background(), "socket-list", "sudo -n ss -H -ltnp", []byte(secret), errors.New("exit status 2"))}},
+			want:      []string{"pm2-stop-unproven", "stage=stop-proof-snapshot", "operation=socket-list", "command=sudo -n ss -H -ltnp", "cause=exit-2"},
+			forbidden: []string{secret, "postgres://secret"},
+		},
+		{
+			name:  "proof timeout without observation failure",
+			proof: &snapshotSequence{items: []PM2Snapshot{before, before, before}},
+			want:  []string{"pm2-stop-unproven", "stop command succeeded", "proof timed out", "PM2 ID 1", "status stopped", "port release on 8080"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			q := PM2Quiescer{Snapshots: tt.proof, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: time.Millisecond, StopProofInterval: 10 * time.Millisecond}
+			_, err := q.Quiesce(context.Background())
+			text := errorText(err)
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("error %q does not contain %q", text, want)
+				}
+			}
+			for _, forbidden := range tt.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("error leaked %q: %q", forbidden, text)
+				}
+			}
+		})
 	}
 }
 func TestPM2QuiescerRecoverUsesOnlyAcknowledgedIdentitiesInReverseStopOrder(t *testing.T) {
@@ -287,13 +329,18 @@ func (r *recoveryRunner) Run(_ context.Context, name string, args ...string) ([]
 
 type snapshotSequence struct {
 	items []PM2Snapshot
+	errs  []error
 	next  int
 }
 
 func (s *snapshotSequence) Snapshot(context.Context) (PM2Snapshot, error) {
 	value := s.items[s.next]
+	var err error
+	if s.next < len(s.errs) {
+		err = s.errs[s.next]
+	}
 	s.next++
-	return value, nil
+	return value, err
 }
 
 type adapterRunner struct {
