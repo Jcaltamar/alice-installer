@@ -108,10 +108,11 @@ const (
 	BackupFailureStagedEmpty
 	BackupFailureArchiveValidation
 	BackupFailurePublication
+	BackupFailureSudoDockerPermission
 )
 
 func (c BackupFailureCode) String() string {
-	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-legacy-container-image-untrusted", "backup-legacy-container-identity-mismatch", "backup-legacy-container-endpoint-mismatch", "backup-legacy-container-unsafe", "backup-legacy-container-ambiguous", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication"}
+	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-legacy-container-image-untrusted", "backup-legacy-container-identity-mismatch", "backup-legacy-container-endpoint-mismatch", "backup-legacy-container-unsafe", "backup-legacy-container-ambiguous", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication", "backup-sudo-docker-permission"}
 	if int(c) >= len(codes) || c == BackupFailureNone {
 		return "backup-failed"
 	}
@@ -234,6 +235,8 @@ func backupFailure(outcome BackupOutcome, stages []BackupStageResult, failed Bac
 func BackupPreflightFailureResult(err error) BackupResult {
 	code, stage, remediation := BackupFailurePrecondition, BackupStagePreconditions, BackupRemediationPrerequisites
 	switch {
+	case errors.Is(err, ErrSudoDockerPermission):
+		code = BackupFailureSudoDockerPermission
 	case errors.Is(err, ErrBackupEngineUnavailable):
 		code = BackupFailureEngineUnavailable
 	case errors.Is(err, ErrResolvedConfigInvalid):

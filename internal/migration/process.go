@@ -254,5 +254,8 @@ func classifyStderr(stderr *boundedStderr) string {
 	if bytes.Contains(stderr.data, []byte("No such container:")) {
 		return "docker-container-absent"
 	}
+	if bytes.Contains(stderr.data, []byte("a password is required")) || bytes.Contains(stderr.data, []byte("not allowed to execute")) || bytes.Contains(stderr.data, []byte("permission denied")) {
+		return SudoDockerPermissionCode
+	}
 	return "process-failed"
 }

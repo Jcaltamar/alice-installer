@@ -12,7 +12,7 @@ import (
 
 // MigrationHandoff owns the PM2 lease outside the TUI policy layer.
 type MigrationHandoff interface {
-	Begin(context.Context, migration.BackupRef) (*migration.PreInstallMigrationLease, error)
+	Begin(context.Context, migration.BackupRef, string, migration.ContainerDisposition) (*migration.PreInstallMigrationLease, error)
 	CompleteSuccess(*migration.PreInstallMigrationLease) error
 	CompleteFailure(*migration.PreInstallMigrationLease) (installation.PM2Recovery, error)
 }
@@ -48,7 +48,7 @@ func (m Model) beginMigrationQuiescence() (Model, tea.Cmd) {
 				msg = MigrationQuiescenceCompletedMsg{Err: errors.New("migration quiescence failed")}
 			}
 		}()
-		lease, err := handoff.Begin(ctx, backup)
+		lease, err := handoff.Begin(ctx, backup, m.backupPlan.ContainerID(), m.containerDisposition)
 		return MigrationQuiescenceCompletedMsg{Lease: lease, Err: err}
 	}
 }
@@ -96,6 +96,12 @@ func (m Model) hasLiveMigrationLease() bool {
 }
 
 func boundedRecoveryCode(recovery installation.PM2Recovery, err error) string {
+	if recovery.Code == migration.DispositionManualRecoveryCode {
+		return recovery.Code
+	}
+	if recovery.Code == migration.DispositionRecoveryUnprovenCode {
+		return recovery.Code
+	}
 	if err != nil {
 		return "pm2-recovery-unproven"
 	}
@@ -106,7 +112,7 @@ func boundedRecoveryCode(recovery installation.PM2Recovery, err error) string {
 }
 
 func (m Model) migrationQuiescenceView() string {
-	return m.deps.Theme.TextMuted.Render("Verifying and stopping the confirmed legacy PM2 services before installation. Press Escape to cancel safely.\n")
+	return m.deps.Theme.TextMuted.Render("Quiescing confirmed legacy services and applying the selected PostgreSQL disposition before installation. Press Escape to cancel safely.\n")
 }
 
 func (m Model) migrationRecoveryView() string {
@@ -114,5 +120,9 @@ func (m Model) migrationRecoveryView() string {
 }
 
 func (m Model) migrationTerminalView() string {
-	return m.deps.Theme.Danger.Render("Migration did not complete. The installer did not report installation success. Recovery status: " + m.migrationRecoveryCode + ".\n")
+	message := "Migration did not complete. The installer did not report installation success. Recovery status: " + m.migrationRecoveryCode + "."
+	if m.migrationRecoveryCode == migration.DispositionManualRecoveryCode {
+		message += " The legacy container was removed and cannot be recreated automatically; use the preserved volumes and validated backup for bounded manual recovery."
+	}
+	return m.deps.Theme.Danger.Render(message + "\n")
 }

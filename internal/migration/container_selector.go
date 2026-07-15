@@ -112,6 +112,9 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 	}
 	candidates, err := inspector.Candidates(ctx, PostgreSQL11Image)
 	if err != nil {
+		if errors.Is(err, ErrSudoDockerPermission) {
+			return ContainerIdentity{}, ErrSudoDockerPermission
+		}
 		return ContainerIdentity{}, ErrContainerPrecondition
 	}
 	if len(candidates) == 0 {
@@ -128,6 +131,9 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 		}
 		details, inspectErr := inspector.Inspect(ctx, candidate.ID)
 		if inspectErr != nil {
+			if errors.Is(inspectErr, ErrSudoDockerPermission) {
+				return ContainerIdentity{}, ErrSudoDockerPermission
+			}
 			inspectionFailed = true
 			continue
 		}

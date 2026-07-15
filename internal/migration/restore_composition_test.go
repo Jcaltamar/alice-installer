@@ -14,8 +14,9 @@ func TestNewProductionRestoreCoordinatorComposesConcreteFailClosedAdapters(t *te
 		t.Fatal("missing production dependencies were accepted")
 	}
 	coordinator, err := NewProductionRestoreCoordinator(ProductionRestoreDependencies{
-		Compose:     compose.NewCLICompose(nil, nil),
-		OperationID: func() (string, error) { return "operation", nil },
+		Compose:        compose.NewCLICompose(nil, nil),
+		OperationID:    func() (string, error) { return "operation", nil },
+		DockerExecutor: OSBinaryExecutor{},
 	})
 	if err != nil {
 		t.Fatalf("NewProductionRestoreCoordinator() error = %v", err)

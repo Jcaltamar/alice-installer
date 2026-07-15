@@ -11,40 +11,43 @@ import (
 func TestPreInstallMigrationCoordinatorBeginRequiresBackupCompleteQuiescenceAndCompensatesPartialStop(t *testing.T) {
 	events := []string{}
 	backup, quiescer := &handoffBackup{events: &events}, &handoffQuiescer{events: &events, stopped: acknowledgedQuiescence()}
-	coordinator := PreInstallMigrationCoordinator{Legacy: backup, PM2: quiescer}
-	lease, err := coordinator.Begin(context.Background(), BackupRef{DumpPath: "/opt/alice/backups/legacy.dump"})
+	container := &handoffContainer{events: &events}
+	coordinator := PreInstallMigrationCoordinator{Legacy: backup, PM2: quiescer, Container: container}
+	id := strings.Repeat("a", 64)
+	lease, err := coordinator.Begin(context.Background(), BackupRef{DumpPath: "/opt/alice/backups/legacy.dump"}, id, DispositionStop)
 	if err != nil || lease == nil {
 		t.Fatalf("lease = %#v, err = %v", lease, err)
 	}
-	if got, want := strings.Join(events, ","), "backup,quiesce"; got != want {
+	if got, want := strings.Join(events, ","), "backup,quiesce,stop"; got != want {
 		t.Fatalf("events = %q, want %q", got, want)
 	}
 	failedEvents := []string{}
 	failedBackup := &handoffBackup{events: &failedEvents, err: errors.New("invalid")}
-	if lease, err := (&PreInstallMigrationCoordinator{Legacy: failedBackup, PM2: quiescer}).Begin(context.Background(), BackupRef{}); err == nil || lease != nil || strings.Join(failedEvents, ",") != "backup" {
+	if lease, err := (&PreInstallMigrationCoordinator{Legacy: failedBackup, PM2: quiescer, Container: container}).Begin(context.Background(), BackupRef{}, id, DispositionStop); err == nil || lease != nil || strings.Join(failedEvents, ",") != "backup" {
 		t.Fatalf("backup failure lease = %#v, events = %q, err = %v", lease, strings.Join(failedEvents, ","), err)
 	}
 	quiescer.stopped.Evidence = nil
-	if lease, err := coordinator.Begin(context.Background(), BackupRef{}); err == nil || lease != nil {
+	if lease, err := coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop); err == nil || lease != nil {
 		t.Fatalf("incomplete lease = %#v, err = %v", lease, err)
 	}
 	quiescer.stopped, quiescer.err = acknowledgedQuiescence(), errors.New("partial stop")
-	if lease, err := coordinator.Begin(context.Background(), BackupRef{}); err == nil || lease != nil || quiescer.recoverCalls != 1 {
+	if lease, err := coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop); err == nil || lease != nil || quiescer.recoverCalls != 1 {
 		t.Fatalf("partial lease = %#v, recoveries = %d, err = %v", lease, quiescer.recoverCalls, err)
 	}
 }
 func TestPreInstallMigrationCoordinatorCompletionConsumesLeaseOnce(t *testing.T) {
 	backup, quiescer := &handoffBackup{}, &handoffQuiescer{stopped: acknowledgedQuiescence()}
 	contexts := 0
-	coordinator := PreInstallMigrationCoordinator{Legacy: backup, PM2: quiescer, RecoveryContext: func() (context.Context, context.CancelFunc) {
+	coordinator := PreInstallMigrationCoordinator{Legacy: backup, PM2: quiescer, Container: &handoffContainer{}, RecoveryContext: func() (context.Context, context.CancelFunc) {
 		contexts++
 		return context.WithCancel(context.Background())
 	}}
-	success, err := coordinator.Begin(context.Background(), BackupRef{})
+	id := strings.Repeat("a", 64)
+	success, err := coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop)
 	if err != nil || coordinator.CompleteSuccess(success) != nil || coordinator.CompleteSuccess(success) != nil || quiescer.recoverCalls != 0 {
 		t.Fatalf("success completion err = %v, recoveries = %d", err, quiescer.recoverCalls)
 	}
-	failure, err := coordinator.Begin(context.Background(), BackupRef{})
+	failure, err := coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +81,37 @@ type handoffQuiescer struct {
 	err          error
 }
 
+type handoffContainer struct {
+	events         *[]string
+	applyResult    ContainerDispositionResult
+	applyErr       error
+	recoveryResult ContainerDispositionResult
+	recoveryErr    error
+}
+
+func (c *handoffContainer) Apply(_ context.Context, _ string, disposition ContainerDisposition) (ContainerDispositionResult, error) {
+	if c.events != nil {
+		*c.events = append(*c.events, map[ContainerDisposition]string{DispositionStop: "stop", DispositionRemove: "remove"}[disposition])
+	}
+	if c.applyErr != nil {
+		return c.applyResult, c.applyErr
+	}
+	return ContainerDispositionResult{Verified: true}, nil
+}
+
+func (c *handoffContainer) Recover(_ context.Context, _ string, disposition ContainerDisposition) (ContainerDispositionResult, error) {
+	if c.events != nil {
+		*c.events = append(*c.events, "container-recover")
+	}
+	if c.recoveryErr != nil || c.recoveryResult.Code != "" {
+		return c.recoveryResult, c.recoveryErr
+	}
+	if disposition == DispositionRemove {
+		return ContainerDispositionResult{Code: DispositionManualRecoveryCode}, nil
+	}
+	return ContainerDispositionResult{Code: DispositionRestartedCode, Verified: true}, nil
+}
+
 func (q *handoffQuiescer) Quiesce(context.Context) (installation.PM2Quiescence, error) {
 	if q.events != nil {
 		*q.events = append(*q.events, "quiesce")
@@ -89,5 +123,31 @@ func (q *handoffQuiescer) Recover(ctx context.Context, _ installation.PM2Quiesce
 		return installation.PM2Recovery{}, errors.New("recovery context is unbounded")
 	}
 	q.recoverCalls++
+	if q.events != nil {
+		*q.events = append(*q.events, "pm2-recover")
+	}
 	return installation.PM2Recovery{Attempted: 1, Recovered: 1, Verified: true}, nil
+}
+
+func TestBeginRecoversPartiallyRemovedContainerBeforePM2(t *testing.T) {
+	for _, tt := range []struct {
+		name, recoveryCode string
+		recoveryErr        error
+	}{
+		{name: "restart succeeds", recoveryCode: DispositionRestartedCode},
+		{name: "restart fails", recoveryCode: DispositionRecoveryUnprovenCode, recoveryErr: errors.New("restart failed")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []string{}
+			container := &handoffContainer{events: &events, applyResult: ContainerDispositionResult{Code: DispositionStoppedCode, Verified: true}, applyErr: errors.New("rm failed"), recoveryResult: ContainerDispositionResult{Code: tt.recoveryCode, Verified: tt.recoveryErr == nil}, recoveryErr: tt.recoveryErr}
+			coordinator := PreInstallMigrationCoordinator{Legacy: &handoffBackup{events: &events}, PM2: &handoffQuiescer{events: &events, stopped: acknowledgedQuiescence()}, Container: container}
+			lease, err := coordinator.Begin(context.Background(), BackupRef{}, strings.Repeat("d", 64), DispositionRemove)
+			if lease != nil || err == nil || strings.Join(events, ",") != "backup,quiesce,remove,container-recover,pm2-recover" {
+				t.Fatalf("lease/events/error = %#v/%q/%v", lease, strings.Join(events, ","), err)
+			}
+			if tt.recoveryErr != nil && !strings.Contains(err.Error(), DispositionRecoveryUnprovenCode) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
 }

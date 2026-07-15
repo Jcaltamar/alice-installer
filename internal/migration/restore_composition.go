@@ -13,18 +13,19 @@ var ErrRestoreCompositionPrecondition = errors.New("restore composition precondi
 // ProductionRestoreDependencies admits only the operational Compose client and an
 // operation-ID generator. Every other restore capability is constructed here.
 type ProductionRestoreDependencies struct {
-	Compose     *compose.CLICompose
-	OperationID func() (string, error)
-	TempRoot    string
+	Compose        *compose.CLICompose
+	OperationID    func() (string, error)
+	TempRoot       string
+	DockerExecutor BinaryExecutor
 }
 
 // NewProductionRestoreCoordinator composes the package-only restore graph. It is
 // deliberately not invoked by a TUI, command, or runtime route in this slice.
 func NewProductionRestoreCoordinator(deps ProductionRestoreDependencies) (RestoreCoordinator, error) {
-	if deps.Compose == nil || deps.OperationID == nil {
+	if deps.Compose == nil || deps.OperationID == nil || deps.DockerExecutor == nil {
 		return RestoreCoordinator{}, ErrRestoreCompositionPrecondition
 	}
-	executor := OSBinaryExecutor{}
+	executor := deps.DockerExecutor
 	credentials := CredentialTransport{TempRoot: deps.TempRoot}
 	validator := PG11ArchiveValidator{Executor: executor}
 	probe := ComposeBackendProbe{Compose: deps.Compose}
