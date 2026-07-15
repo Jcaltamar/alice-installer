@@ -56,7 +56,7 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 		if err != nil || identity.CWD == "" || identity.ExecPath == "" || identity.StartTicks == 0 {
 			return PM2Snapshot{}, errors.New("proc identity is unavailable")
 		}
-		if !samePath(record.CWD, identity.CWD) || !samePath(record.ExecPath, identity.ExecPath) {
+		if !samePath(record.CWD, identity.CWD) {
 			return PM2Snapshot{}, errors.New("pm2 and proc identity disagree")
 		}
 		proc[record.PID] = identity

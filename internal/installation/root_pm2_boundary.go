@@ -69,7 +69,7 @@ func validProcPath(path string) bool {
 }
 
 func (b RootPM2Boundary) mutate(ctx context.Context, action string, identity PM2ProcessIdentity) error {
-	if b.Runner == nil || action != "stop" && action != "start" || identity.PMID < 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" {
+	if b.Runner == nil || action != "stop" && action != "start" || identity.PMID < 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" || identity.RuntimeExecPath == "" {
 		return errors.New("root PM2 mutation rejected")
 	}
 	id := strconv.FormatInt(identity.PMID, 10)

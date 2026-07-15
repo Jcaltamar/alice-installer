@@ -22,12 +22,14 @@ type PM2Record struct {
 	Name, CWD, ExecPath, Status string
 }
 type PM2ProcessIdentity struct {
-	PMID          int64
-	Name          string
-	PID           int
-	CWD, ExecPath string
-	Port          uint16
-	StartTicks    uint64
+	PMID            int64
+	Name            string
+	PID             int
+	CWD             string
+	ExecPath        string
+	RuntimeExecPath string
+	Port            uint16
+	StartTicks      uint64
 }
 type PM2StoppedEvidence struct {
 	PMID         int64
@@ -186,11 +188,11 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 			continue
 		}
 		var port uint16
-		var root string
+		var contract pm2ServiceContract
 		matches := 0
 		for candidate := range owners[record.PID] {
-			if candidateRoot, allowed := allowedPM2Contract(record.Name, record.CWD, candidate); allowed {
-				port, root = candidate, candidateRoot
+			if candidateContract, allowed := allowedPM2Contract(record.Name, record.CWD, candidate); allowed {
+				port, contract = candidate, candidateContract
 				matches++
 			}
 		}
@@ -201,10 +203,10 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 			return nil, errors.New("socket ownership is ambiguous")
 		}
 		identity, ok := proc[record.PID]
-		if !ok || identity.StartTicks == 0 || !samePath(identity.CWD, record.CWD) || !samePath(identity.ExecPath, record.ExecPath) || !within(root, identity.CWD) {
+		if !ok || identity.StartTicks == 0 || record.ExecPath != contract.pm2ExecPath || identity.ExecPath != contract.runtimeExecPath || identity.CWD != contract.cwd {
 			return nil, errors.New("process identity is invalid")
 		}
-		selected = append(selected, PM2ProcessIdentity{PMID: record.ID, Name: record.Name, PID: record.PID, CWD: identity.CWD, ExecPath: identity.ExecPath, Port: port, StartTicks: identity.StartTicks})
+		selected = append(selected, PM2ProcessIdentity{PMID: record.ID, Name: record.Name, PID: record.PID, CWD: identity.CWD, ExecPath: record.ExecPath, RuntimeExecPath: identity.ExecPath, Port: port, StartTicks: identity.StartTicks})
 	}
 	if len(selected) == 0 {
 		return nil, errors.New("no qualifying PM2 identity")
@@ -212,21 +214,24 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 	sort.Slice(selected, func(i, j int) bool { return selected[i].PMID < selected[j].PMID })
 	return selected, nil
 }
-func allowedPM2Contract(name, cwd string, port uint16) (string, bool) {
-	contracts := []struct {
-		name, cwd string
-		port      uint16
-	}{{"front-guardian", guardianRoot, 8080}, {"ws", backendRoot + "/websocket", 4550}, {"node", backendRoot + "/node", 9090}}
+
+type pm2ServiceContract struct {
+	name, cwd, pm2ExecPath, runtimeExecPath string
+	port                                    uint16
+}
+
+func allowedPM2Contract(name, cwd string, port uint16) (pm2ServiceContract, bool) {
+	contracts := []pm2ServiceContract{
+		{"front-guardian", guardianRoot, "/usr/bin/bash", "/usr/local/bin/node", 8080},
+		{"ws", backendRoot + "/websocket", "/usr/bin/bash", "/usr/local/bin/node", 4550},
+		{"node", backendRoot + "/node", backendRoot + "/node/bin/www", "/usr/local/bin/node", 9090},
+	}
 	for _, contract := range contracts {
-		if name == contract.name && samePath(cwd, contract.cwd) && port == contract.port {
-			return contract.cwd, true
+		if name == contract.name && cwd == contract.cwd && port == contract.port {
+			return contract, true
 		}
 	}
-	return "", false
-}
-func within(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !filepath.IsAbs(rel) && (len(rel) < 3 || rel[:3] != ".."+string(filepath.Separator))
+	return pm2ServiceContract{}, false
 }
 func samePath(left, right string) bool { return filepath.Clean(left) == filepath.Clean(right) }
 
@@ -333,7 +338,7 @@ func (q PM2Quiescer) Recover(ctx context.Context, stopped PM2Quiescence) (PM2Rec
 func acknowledgedRecoveryTargets(stopped PM2Quiescence) ([]PM2ProcessIdentity, bool) {
 	byID := make(map[int64]PM2ProcessIdentity, len(stopped.Processes))
 	for _, identity := range stopped.Processes {
-		if _, duplicate := byID[identity.PMID]; identity.PMID < 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" || duplicate {
+		if _, duplicate := byID[identity.PMID]; identity.PMID < 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" || identity.RuntimeExecPath == "" || duplicate {
 			return nil, false
 		}
 		byID[identity.PMID] = identity
@@ -368,7 +373,7 @@ func recoverySnapshotProves(snapshot PM2Snapshot, target PM2ProcessIdentity, sta
 		return record.Status == "stopped" && owners == 0
 	}
 	identity, ok := snapshot.Proc[record.PID]
-	return record.Status == "online" && record.PID > 0 && record.PID != target.PID && owners == 1 && ok && identity.StartTicks != 0 && identity.StartTicks != target.StartTicks && samePath(identity.CWD, target.CWD) && samePath(identity.ExecPath, target.ExecPath)
+	return record.Status == "online" && record.PID > 0 && record.PID != target.PID && owners == 1 && ok && identity.StartTicks != 0 && identity.StartTicks != target.StartTicks && identity.CWD == target.CWD && identity.ExecPath == target.RuntimeExecPath
 }
 func exactRecoveryRecord(records []PM2Record, target PM2ProcessIdentity) (PM2Record, bool) {
 	var match PM2Record
@@ -377,7 +382,7 @@ func exactRecoveryRecord(records []PM2Record, target PM2ProcessIdentity) (PM2Rec
 		if record.ID != target.PMID {
 			continue
 		}
-		if found || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
+		if found || record.Name != target.Name || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
 			return PM2Record{}, false
 		}
 		match = record

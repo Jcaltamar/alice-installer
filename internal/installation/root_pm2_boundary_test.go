@@ -30,7 +30,7 @@ func TestRootPM2BoundaryUsesExactSudoArgv(t *testing.T) {
 	boundary := RootPM2Boundary{Runner: runner}
 	_, _, _ = boundary.Run(context.Background(), "pm2", "jlist")
 	_, _, _ = boundary.Run(context.Background(), "ss", "-H", "-ltnp")
-	id := PM2ProcessIdentity{PMID: 0, PID: 11174, CWD: backendRoot + "/node", ExecPath: "/usr/bin/node", Port: 9090, StartTicks: 9}
+	id := PM2ProcessIdentity{PMID: 0, PID: 11174, CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", RuntimeExecPath: "/usr/local/bin/node", Port: 9090, StartTicks: 9}
 	_ = boundary.mutate(context.Background(), "stop", id)
 	_ = boundary.mutate(context.Background(), "start", id)
 	want := []rootCall{{"sudo", []string{"-n", "pm2", "jlist"}}, {"sudo", []string{"-n", "ss", "-H", "-ltnp"}}, {"sudo", []string{"-n", "pm2", "stop", "0"}}, {"sudo", []string{"-n", "pm2", "start", "0"}}}

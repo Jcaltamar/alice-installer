@@ -7,8 +7,8 @@ import (
 )
 
 func TestLinuxPM2SnapshotProvider(t *testing.T) {
-	record := PM2Record{ID: 1, PID: 41, Name: "guardian", CWD: "/opt/alice-guardian", ExecPath: "/usr/bin/node", Status: "online"}
-	identity := ProcIdentity{CWD: record.CWD, ExecPath: record.ExecPath, StartTicks: 9}
+	record := PM2Record{ID: 1, PID: 41, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}
+	identity := ProcIdentity{CWD: record.CWD, ExecPath: "/usr/local/bin/node", StartTicks: 9}
 
 	t.Run("assembles each candidate", func(t *testing.T) {
 		provider := snapshotProvider(record, identity)
