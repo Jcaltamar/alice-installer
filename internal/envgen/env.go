@@ -22,6 +22,7 @@ type PortsConfig struct {
 	HLSPort          int
 	HLSPort2         int
 	HLSPort3         int
+	WebRTCICEPort    int
 	RTMPPort         int
 	MilvusPort       int
 	MinioAPIPort     int
@@ -144,6 +145,7 @@ func (t *Templater) Render(template []byte, in Input) ([]byte, error) {
 	subs["HLS_PORT"] = fmt.Sprintf("%d", p.HLSPort)
 	subs["HLS_PORT2"] = fmt.Sprintf("%d", p.HLSPort2)
 	subs["HLS_PORT3"] = fmt.Sprintf("%d", p.HLSPort3)
+	subs["WEBRTC_ICE_PORT"] = fmt.Sprintf("%d", p.WebRTCICEPort)
 	subs["RTMP_PORT"] = fmt.Sprintf("%d", p.RTMPPort)
 	subs["MILVUS_PORT"] = fmt.Sprintf("%d", p.MilvusPort)
 	subs["MINIO_API_PORT"] = fmt.Sprintf("%d", p.MinioAPIPort)

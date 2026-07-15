@@ -92,6 +92,7 @@ type Dependencies struct {
 
 	// RequiredTCPPorts is the env-key → default port map used for port scanning.
 	RequiredTCPPorts map[string]int
+	RequiredUDPPorts map[string]int
 
 	// CmdExecutor is the test seam for running bootstrap actions.
 	// When nil, the default OS-backed executor is used.
@@ -219,6 +220,11 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 			conflicts = append(conflicts, fmt.Sprintf("TCP %d", p))
 		}
 	}
+	for _, p := range tcpPortValues(deps.RequiredUDPPorts) {
+		if !deps.Ports.IsUDPAvailable(ctx, p) {
+			conflicts = append(conflicts, fmt.Sprintf("UDP %d", p))
+		}
+	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("portscan: port conflicts (no interactive resolution in unattended mode): %s",
 			strings.Join(conflicts, ", "))
@@ -234,7 +240,14 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 	}
 
 	arch := deps.Arch.Detect()
-	portsConfig := portsConfigFromMap(deps.RequiredTCPPorts)
+	portPlan := make(map[string]int, len(deps.RequiredTCPPorts)+len(deps.RequiredUDPPorts))
+	for key, port := range deps.RequiredTCPPorts {
+		portPlan[key] = port
+	}
+	for key, port := range deps.RequiredUDPPorts {
+		portPlan[key] = port
+	}
+	portsConfig := portsConfigFromMap(portPlan)
 	envInput := envgen.Input{
 		Workspace:        cfg.WorkspaceName,
 		Arch:             arch,
@@ -400,6 +413,7 @@ func portsConfigFromMap(p map[string]int) envgen.PortsConfig {
 		HLSPort:          p["HLS_PORT"],
 		HLSPort2:         p["HLS_PORT2"],
 		HLSPort3:         p["HLS_PORT3"],
+		WebRTCICEPort:    p["WEBRTC_ICE_PORT"],
 		RTMPPort:         p["RTMP_PORT"],
 		MilvusPort:       p["MILVUS_PORT"],
 		MinioAPIPort:     p["MINIO_API_PORT"],

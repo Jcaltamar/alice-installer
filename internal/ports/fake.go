@@ -9,13 +9,17 @@ import (
 // OccupiedPorts lists ports that should appear as NOT available.
 // All other ports are considered free.
 type FakePortScanner struct {
-	OccupiedPorts []int
+	OccupiedPorts    []int
+	OccupiedTCPPorts []int
+	OccupiedUDPPorts []int
 }
 
-func (f *FakePortScanner) isOccupied(port int) bool {
-	for _, p := range f.OccupiedPorts {
-		if p == port {
-			return true
+func isOccupied(port int, occupied ...[]int) bool {
+	for _, ports := range occupied {
+		for _, p := range ports {
+			if p == port {
+				return true
+			}
 		}
 	}
 	return false
@@ -23,12 +27,12 @@ func (f *FakePortScanner) isOccupied(port int) bool {
 
 // IsAvailable returns false if port is in OccupiedPorts, true otherwise.
 func (f *FakePortScanner) IsAvailable(_ context.Context, port int) bool {
-	return !f.isOccupied(port)
+	return !isOccupied(port, f.OccupiedPorts, f.OccupiedTCPPorts)
 }
 
 // IsUDPAvailable follows the same logic as IsAvailable.
 func (f *FakePortScanner) IsUDPAvailable(_ context.Context, port int) bool {
-	return !f.isOccupied(port)
+	return !isOccupied(port, f.OccupiedPorts, f.OccupiedUDPPorts)
 }
 
 // FirstAvailable iterates from start until it finds a free port or exhausts

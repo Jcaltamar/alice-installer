@@ -75,18 +75,20 @@ func probeDir(dir string) (bool, string) {
 
 // Coordinator orchestrates all preflight checks and aggregates results into a Report.
 type Coordinator struct {
-	OS               platform.OSGuard
-	Arch             platform.ArchDetector
-	Docker           docker.DockerClient
-	Compose          compose.ComposeRunner
-	GPU              platform.GPUDetector
-	Ports            ports.PortScanner
-	Dirs             DirectoryChecker
-	MediaDir         string
-	ConfigDir        string
-	WorkspaceDir     string
-	RequiredTCPPorts []int
-	RequiredUDPPorts []int
+	OS                platform.OSGuard
+	Arch              platform.ArchDetector
+	Docker            docker.DockerClient
+	Compose           compose.ComposeRunner
+	GPU               platform.GPUDetector
+	Ports             ports.PortScanner
+	Dirs              DirectoryChecker
+	MediaDir          string
+	ConfigDir         string
+	WorkspaceDir      string
+	RequiredTCPPorts  []int
+	RequiredUDPPorts  []int
+	ExemptTCPPorts    map[int]struct{}
+	ExemptUDPPorts    map[int]struct{}
 	MinDockerVersion  string
 	MinComposeVersion string
 }
@@ -306,11 +308,17 @@ func (c Coordinator) checkPorts(ctx context.Context) CheckResult {
 	var occupied []string
 
 	for _, p := range c.RequiredTCPPorts {
+		if _, exempt := c.ExemptTCPPorts[p]; exempt {
+			continue
+		}
 		if !c.Ports.IsAvailable(ctx, p) {
 			occupied = append(occupied, fmt.Sprintf("TCP %d", p))
 		}
 	}
 	for _, p := range c.RequiredUDPPorts {
+		if _, exempt := c.ExemptUDPPorts[p]; exempt {
+			continue
+		}
 		if !c.Ports.IsUDPAvailable(ctx, p) {
 			occupied = append(occupied, fmt.Sprintf("UDP %d", p))
 		}
@@ -318,10 +326,10 @@ func (c Coordinator) checkPorts(ctx context.Context) CheckResult {
 
 	if len(occupied) > 0 {
 		return CheckResult{
-			ID:     CheckPortsAvailable,
-			Status: StatusWarn,
-			Title:  "Port conflicts",
-			Detail: "occupied: " + strings.Join(occupied, ", "),
+			ID:          CheckPortsAvailable,
+			Status:      StatusWarn,
+			Title:       "Port conflicts",
+			Detail:      "occupied: " + strings.Join(occupied, ", "),
 			Remediation: "The installer will allow you to choose alternate ports for each conflict.",
 		}
 	}
@@ -381,4 +389,3 @@ func minVersion(a, b string) string {
 	}
 	return b
 }
-
