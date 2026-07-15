@@ -162,7 +162,9 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 		t.Fatal("Quiesce() succeeded, want observation failure")
 	}
 
-	m := NewModel(buildTestDeps())
+	deps := buildTestDeps()
+	deps.Debug = true
+	m := NewModel(deps)
 	m.state = StateMigrationQuiescence
 	updated, _ := m.Update(MigrationQuiescenceCompletedMsg{Err: err})
 	view := updated.(Model).View()
@@ -182,6 +184,56 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 		if strings.Contains(view, forbidden) {
 			t.Fatalf("terminal view leaked %q: %q", forbidden, view)
 		}
+	}
+}
+
+func TestPM2StopProofTerminalDiagnosticsRespectDebugMode(t *testing.T) {
+	const secret = "DATABASE_URL=postgres://secret"
+	for _, tt := range []struct {
+		name       string
+		debug      bool
+		diagnostic *installation.PM2ObservationDiagnostic
+		want       []string
+	}{
+		{
+			name:       "debug command failure",
+			debug:      true,
+			diagnostic: &installation.PM2ObservationDiagnostic{Stage: "stop-proof-snapshot", Operation: "pm2-jlist", Command: "sudo -n pm2 jlist", Cause: "exit-1", Stderr: secret},
+			want:       []string{"pm2-stop-unproven", "command=sudo -n pm2 jlist", "cause=exit-1"},
+		},
+		{
+			name:       "debug timeout",
+			debug:      true,
+			diagnostic: &installation.PM2ObservationDiagnostic{StopProofTimedOut: true, PMID: 7, Port: 9090},
+			want:       []string{"pm2-stop-unproven", "stop command succeeded", "PM2 ID 7", "port release on 9090"},
+		},
+		{
+			name:       "normal mode remains terse",
+			diagnostic: &installation.PM2ObservationDiagnostic{Stage: "stop-proof-snapshot", Operation: "pm2-jlist", Command: "sudo -n pm2 jlist", Cause: "exit-1", Stderr: secret},
+			want:       []string{"pm2-stop-unproven"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := buildTestDeps()
+			deps.Debug = tt.debug
+			m := NewModel(deps)
+			m.state = StateMigrationQuiescence
+			updated, _ := m.Update(MigrationQuiescenceCompletedMsg{Err: installation.QuiescenceError{Code: "pm2-stop-unproven", Diagnostic: tt.diagnostic}})
+			view := updated.(Model).View()
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("view %q does not contain %q", view, want)
+				}
+			}
+			for _, forbidden := range []string{secret, "postgres://secret", "DATABASE_URL"} {
+				if strings.Contains(view, forbidden) {
+					t.Fatalf("view leaked %q: %q", forbidden, view)
+				}
+			}
+			if !tt.debug && strings.Contains(view, "command=") {
+				t.Fatalf("normal mode exposed command diagnostic: %q", view)
+			}
+		})
 	}
 }
 

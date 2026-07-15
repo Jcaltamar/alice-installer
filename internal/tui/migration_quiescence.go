@@ -127,7 +127,7 @@ func boundedQuiescenceCode(err error) string {
 
 func boundedQuiescenceDiagnostic(err error) string {
 	var failure installation.QuiescenceError
-	if !errors.As(err, &failure) || failure.Code != "pm2-observation-unavailable" || failure.Diagnostic == nil {
+	if !errors.As(err, &failure) || failure.Diagnostic == nil || failure.Code != "pm2-observation-unavailable" && failure.Code != "pm2-stop-unproven" {
 		return ""
 	}
 	return failure.Diagnostic.String()

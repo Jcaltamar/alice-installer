@@ -315,8 +315,8 @@ func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 			return stopped, QuiescenceError{Code: "pm2-stop-failed"}
 		}
 		stopped.Evidence = append(stopped.Evidence, PM2StoppedEvidence{PMID: target.PMID, OriginalPID: target.PID, Port: target.Port, StartTicks: target.StartTicks, StopCommandSucceeded: true})
-		if !q.waitForStoppedAndReleased(ctx, target) {
-			return stopped, QuiescenceError{Code: "pm2-stop-unproven"}
+		if diagnostic := q.waitForStoppedAndReleased(ctx, target); diagnostic != nil {
+			return stopped, QuiescenceError{Code: "pm2-stop-unproven", Diagnostic: diagnostic}
 		}
 		stopped.Evidence[len(stopped.Evidence)-1].StopVerified = true
 		pending = pending[1:]
@@ -410,7 +410,7 @@ func (q PM2Quiescer) snapshot(ctx context.Context) (PM2Snapshot, error) {
 	}
 	return q.Snapshots.Snapshot(ctx)
 }
-func (q PM2Quiescer) waitForStoppedAndReleased(ctx context.Context, target PM2ProcessIdentity) bool {
+func (q PM2Quiescer) waitForStoppedAndReleased(ctx context.Context, target PM2ProcessIdentity) *PM2ObservationDiagnostic {
 	timeout := q.StopProofTimeout
 	if timeout <= 0 {
 		timeout = defaultPM2StopProofTimeout
@@ -421,16 +421,28 @@ func (q PM2Quiescer) waitForStoppedAndReleased(ctx context.Context, target PM2Pr
 	}
 	proofCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var observationFailure *PM2ObservationDiagnostic
 	for {
 		after, err := q.snapshot(proofCtx)
 		if err == nil && proofCtx.Err() == nil && stoppedAndReleased(after, target) {
-			return true
+			return nil
+		}
+		if err != nil && observationFailure == nil {
+			observationFailure = withObservationStage(err, "stop-proof-snapshot")
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-proofCtx.Done():
 			timer.Stop()
-			return false
+			if observationFailure != nil {
+				return observationFailure
+			}
+			return &PM2ObservationDiagnostic{
+				StopProofTimedOut:  errors.Is(proofCtx.Err(), context.DeadlineExceeded),
+				StopProofCancelled: !errors.Is(proofCtx.Err(), context.DeadlineExceeded),
+				PMID:               target.PMID,
+				Port:               target.Port,
+			}
 		case <-timer.C:
 		}
 	}

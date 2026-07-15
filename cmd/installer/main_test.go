@@ -206,6 +206,25 @@ func TestParseFlags_UnknownFlagError(t *testing.T) {
 // newDependencies tests
 // ---------------------------------------------------------------------------
 
+func TestBuildDependenciesEnablesDebugOnlyForExactValue(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1", want: true},
+		{value: "0", want: false},
+		{value: "true", want: false},
+		{value: "", want: false},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("DEBUG", tt.value)
+			if got := buildDependencies(context.Background(), flags{}, false).Debug; got != tt.want {
+				t.Fatalf("Debug = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewDependencies_AllFieldsNonNil(t *testing.T) {
 	f := flags{
 		MediaDir:  "/opt/alice-media",
