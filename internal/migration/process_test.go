@@ -58,8 +58,9 @@ func TestCredentialTransportAndHelperDumpSpecKeepSecretOutsideObservableBoundary
 	wantArgs := []string{
 		"run", "--rm", "--pull=never", "--name", run.Name, "--label", HelperCleanupLabel + "=true", "--label", HelperOperationLabel + "=" + run.OperationID,
 		"--network", "host", "--mount", "type=bind,src=" + credential.HostPath() + ",dst=" + ContainerPGPassPath + ",readonly",
-		"--env", "PGPASSFILE=" + ContainerPGPassPath, "--user", fmt.Sprintf("%d:%d", credential.ownerUID, credential.ownerGID), string(PostgreSQL11Image),
-		"pg_dump", "--format=custom", "--no-password", "--host=" + config.Host,
+		"--env", "PGPASSFILE=" + ContainerPGPassPath, "--user", fmt.Sprintf("%d:%d", credential.ownerUID, credential.ownerGID),
+		"--entrypoint", "/opt/bitnami/postgresql/bin/pg_dump", string(PostgreSQL11Image),
+		"--format=custom", "--no-password", "--host=" + config.Host,
 		"--port=5432", "--username=" + config.Username, "--dbname=" + config.Database,
 	}
 	if !equalStrings(run.Spec.Args, wantArgs) {
@@ -89,11 +90,15 @@ func TestHelperDumpStreamsCustomArchiveToStdout(t *testing.T) {
 		t.Fatalf("BuildHelperDump() error = %v", err)
 	}
 
-	pgDumpIndex := slices.Index(run.Spec.Args, "pg_dump")
-	if pgDumpIndex < 0 {
-		t.Fatalf("helper args do not invoke pg_dump: %#v", run.Spec.Args)
+	entrypointIndex := slices.Index(run.Spec.Args, "--entrypoint")
+	imageIndex := slices.Index(run.Spec.Args, string(PostgreSQL11Image))
+	if entrypointIndex < 0 || entrypointIndex+1 >= len(run.Spec.Args) || run.Spec.Args[entrypointIndex+1] != "/opt/bitnami/postgresql/bin/pg_dump" || entrypointIndex >= imageIndex {
+		t.Fatalf("helper does not set the direct pg_dump entrypoint before the image: %#v", run.Spec.Args)
 	}
-	pgDumpArgs := run.Spec.Args[pgDumpIndex+1:]
+	pgDumpArgs := run.Spec.Args[imageIndex+1:]
+	if slices.Contains(pgDumpArgs, "pg_dump") || slices.Contains(pgDumpArgs, "/opt/bitnami/postgresql/bin/pg_dump") {
+		t.Fatalf("pg_dump executable must not be duplicated after the image: %#v", pgDumpArgs)
+	}
 	if !slices.Contains(pgDumpArgs, "--format=custom") {
 		t.Fatalf("pg_dump args do not preserve custom format: %#v", pgDumpArgs)
 	}
