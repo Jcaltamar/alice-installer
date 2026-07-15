@@ -67,10 +67,12 @@ func (c *PreInstallMigrationCoordinator) CompleteFailure(lease *PreInstallMigrat
 	if err != nil || !first {
 		return installation.PM2Recovery{}, err
 	}
-	ctx, cancel := c.recoveryContext()
-	defer cancel()
-	container, containerErr := c.Container.Recover(ctx, lease.containerID, lease.disposition)
-	pm2, pm2Err := c.PM2.Recover(ctx, quiescence)
+	containerCtx, cancelContainer := c.recoveryContext()
+	container, containerErr := c.Container.Recover(containerCtx, lease.containerID, lease.disposition)
+	cancelContainer()
+	pm2Ctx, cancelPM2 := c.recoveryContext()
+	pm2, pm2Err := c.PM2.Recover(pm2Ctx, quiescence)
+	cancelPM2()
 	if lease.disposition == DispositionRemove {
 		pm2.Code = DispositionManualRecoveryCode
 	} else if containerErr != nil || !container.Verified {

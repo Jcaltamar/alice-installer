@@ -49,6 +49,7 @@ type PM2Recovery struct {
 	Attempted, Recovered int
 	Verified             bool
 	Code                 string
+	Diagnostic           *PM2ObservationDiagnostic
 }
 
 type QuiescenceError struct {
@@ -350,20 +351,65 @@ func (q PM2Quiescer) Recover(ctx context.Context, stopped PM2Quiescence) (PM2Rec
 	recovery := PM2Recovery{Code: "pm2-recovery-unproven"}
 	for index := len(targets) - 1; index >= 0; index-- {
 		target := targets[index]
-		if before, err := q.snapshot(ctx); err != nil || !recoverySnapshotProves(before, target, false) {
+		if before, err := q.snapshot(ctx); err != nil {
+			recovery.Diagnostic = withObservationStage(err, "pre-recovery-snapshot")
+			return recovery, errors.New("pm2 recovery was not proven")
+		} else if !recoverySnapshotProves(before, target, false) {
 			return recovery, errors.New("pm2 recovery was not proven")
 		}
 		recovery.Attempted++
 		if err := q.Controller.Start(ctx, target); err != nil {
+			recovery.Diagnostic = &PM2ObservationDiagnostic{Stage: "recovery-start", Operation: "pm2-start", Command: fmt.Sprintf("sudo -n pm2 start %d", target.PMID), Cause: observationCause(ctx, err), PMID: target.PMID, Port: target.Port}
 			return recovery, errors.New("pm2 recovery was not proven")
 		}
-		if after, err := q.snapshot(ctx); err != nil || !recoverySnapshotProves(after, target, true) {
+		if diagnostic := q.waitForRecoveryProof(ctx, target); diagnostic != nil {
+			recovery.Diagnostic = diagnostic
 			return recovery, errors.New("pm2 recovery was not proven")
 		}
 		recovery.Recovered++
 	}
 	recovery.Verified, recovery.Code = true, "pm2-recovery-verified"
 	return recovery, nil
+}
+
+func (q PM2Quiescer) waitForRecoveryProof(ctx context.Context, target PM2ProcessIdentity) *PM2ObservationDiagnostic {
+	timeout := q.StopProofTimeout
+	if timeout <= 0 {
+		timeout = defaultPM2StopProofTimeout
+	}
+	interval := q.StopProofInterval
+	if interval <= 0 {
+		interval = defaultPM2StopProofInterval
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var observationFailure *PM2ObservationDiagnostic
+	for {
+		if proofCtx.Err() != nil {
+			return &PM2ObservationDiagnostic{RecoveryProofTimedOut: errors.Is(proofCtx.Err(), context.DeadlineExceeded), RecoveryProofCancelled: !errors.Is(proofCtx.Err(), context.DeadlineExceeded), PMID: target.PMID, Port: target.Port}
+		}
+		after, err := q.snapshot(proofCtx)
+		if err == nil && proofCtx.Err() == nil && recoverySnapshotProves(after, target, true) {
+			return nil
+		}
+		if err != nil && observationFailure == nil {
+			diagnostic := withObservationStage(err, "recovery-proof-snapshot")
+			contextInterrupted := diagnostic.Cause == "timeout" || diagnostic.Cause == "cancelled" || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+			if proofCtx.Err() == nil || !contextInterrupted {
+				observationFailure = diagnostic
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-proofCtx.Done():
+			timer.Stop()
+			if observationFailure != nil {
+				return observationFailure
+			}
+			return &PM2ObservationDiagnostic{RecoveryProofTimedOut: errors.Is(proofCtx.Err(), context.DeadlineExceeded), RecoveryProofCancelled: !errors.Is(proofCtx.Err(), context.DeadlineExceeded), PMID: target.PMID, Port: target.Port}
+		case <-timer.C:
+		}
+	}
 }
 func acknowledgedRecoveryTargets(stopped PM2Quiescence) ([]PM2ProcessIdentity, bool) {
 	byID := make(map[int64]PM2ProcessIdentity, len(stopped.Processes))

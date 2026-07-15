@@ -11,15 +11,17 @@ import (
 // PM2ObservationDiagnostic contains only reviewed, bounded operator context.
 // Command stdout is deliberately absent because pm2 jlist contains environment data.
 type PM2ObservationDiagnostic struct {
-	Stage              string
-	Operation          string
-	Command            string
-	Cause              string
-	Stderr             string
-	StopProofTimedOut  bool
-	StopProofCancelled bool
-	PMID               int64
-	Port               uint16
+	Stage                  string
+	Operation              string
+	Command                string
+	Cause                  string
+	Stderr                 string
+	StopProofTimedOut      bool
+	StopProofCancelled     bool
+	RecoveryProofTimedOut  bool
+	RecoveryProofCancelled bool
+	PMID                   int64
+	Port                   uint16
 }
 
 func (d PM2ObservationDiagnostic) String() string {
@@ -28,6 +30,12 @@ func (d PM2ObservationDiagnostic) String() string {
 	}
 	if d.StopProofCancelled {
 		return fmt.Sprintf("stop command succeeded for PM2 ID %d; proof was cancelled before exact PM2 record status stopped and target port %d release were proven", d.PMID, d.Port)
+	}
+	if d.RecoveryProofTimedOut {
+		return fmt.Sprintf("recovery command succeeded for PM2 ID %d; proof timed out: deadline elapsed waiting for exact online PM2 identity, target port %d ownership, and proc identity", d.PMID, d.Port)
+	}
+	if d.RecoveryProofCancelled {
+		return fmt.Sprintf("recovery command succeeded for PM2 ID %d; proof was cancelled before exact online PM2 identity, target port %d ownership, and proc identity were proven", d.PMID, d.Port)
 	}
 	parts := make([]string, 0, 5)
 	for _, part := range []struct{ key, value string }{

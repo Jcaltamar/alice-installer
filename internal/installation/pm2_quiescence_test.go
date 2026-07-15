@@ -329,6 +329,76 @@ func TestPM2QuiescerRecoverUsesOnlyAcknowledgedIdentitiesInReverseStopOrder(t *t
 		t.Fatalf("start selectors = %q, want %q", got, want)
 	}
 }
+
+func TestPM2QuiescerRecoverPollsUntilExactIdentityConverges(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 1, Name: "front-guardian", PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 10}
+	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{target}, Evidence: []PM2StoppedEvidence{{PMID: 1, OriginalPID: 11, Port: 8080, StartTicks: 10, StopVerified: true}}}
+	provider := &snapshotSequence{items: []PM2Snapshot{
+		recoverySnapshot(target, "stopped", 0, 0),
+		recoverySnapshot(target, "stopped", 0, 0),
+		recoverySnapshot(target, "online", 111, 100),
+	}}
+
+	recovery, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: 50 * time.Millisecond, StopProofInterval: time.Millisecond}).Recover(context.Background(), stopped)
+	if err != nil || !recovery.Verified || recovery.Attempted != 1 || recovery.Recovered != 1 || provider.next != 3 {
+		t.Fatalf("recovery = %#v, snapshots = %d, err = %v", recovery, provider.next, err)
+	}
+}
+
+func TestPM2QuiescerRecoverClassifiesFailureTimeoutAndCancellation(t *testing.T) {
+	target := PM2ProcessIdentity{PMID: 2, Name: "node", PID: 22, CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", RuntimeExecPath: "/usr/local/bin/node", Port: 9090, StartTicks: 20}
+	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{target}, Evidence: []PM2StoppedEvidence{{PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
+
+	t.Run("observation failure", func(t *testing.T) {
+		failure := observationCommandError(context.Background(), "socket-list", "sudo -n ss -H -ltnp", []byte("DATABASE_URL=secret"), errors.New("exit status 2"))
+		provider := &snapshotSequence{items: []PM2Snapshot{recoverySnapshot(target, "stopped", 0, 0), {}}, errs: []error{nil, failure}}
+		recovery, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: time.Millisecond, StopProofInterval: 10 * time.Millisecond}).Recover(context.Background(), stopped)
+		if err == nil || recovery.Diagnostic == nil || recovery.Diagnostic.Operation != "socket-list" || recovery.Diagnostic.Cause != "exit-2" || recovery.Diagnostic.Stderr != "" {
+			t.Fatalf("recovery = %#v, err = %v", recovery, err)
+		}
+	})
+
+	t.Run("convergence timeout", func(t *testing.T) {
+		provider := &deadlineSnapshotProvider{first: recoverySnapshot(target, "stopped", 0, 0)}
+		recovery, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: &recoveryRunner{}}, StopProofTimeout: 20 * time.Millisecond, StopProofInterval: time.Millisecond}).Recover(context.Background(), stopped)
+		if err == nil || recovery.Diagnostic == nil || !recovery.Diagnostic.RecoveryProofTimedOut || recovery.Diagnostic.Operation != "" || recovery.Diagnostic.Cause != "" {
+			t.Fatalf("recovery = %#v, err = %v", recovery, err)
+		}
+	})
+
+	t.Run("parent cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		provider := &snapshotSequence{items: []PM2Snapshot{recoverySnapshot(target, "stopped", 0, 0)}}
+		runner := &recoveryRunner{onRun: cancel}
+		started := time.Now()
+		recovery, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: runner}}).Recover(ctx, stopped)
+		if err == nil || time.Since(started) > 100*time.Millisecond || recovery.Diagnostic == nil || !recovery.Diagnostic.RecoveryProofCancelled {
+			t.Fatalf("recovery = %#v, elapsed = %s, err = %v", recovery, time.Since(started), err)
+		}
+	})
+}
+
+func TestPM2QuiescerRecoversProductionServicesAfterDelayedConvergence(t *testing.T) {
+	targets := []PM2ProcessIdentity{
+		{PMID: 1, Name: "front-guardian", PID: 11, CWD: guardianRoot, ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 10},
+		{PMID: 2, Name: "ws", PID: 22, CWD: backendRoot + "/websocket", ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 4550, StartTicks: 20},
+		{PMID: 3, Name: "node", PID: 33, CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", RuntimeExecPath: "/usr/local/bin/node", Port: 9090, StartTicks: 30},
+	}
+	stopped := PM2Quiescence{Processes: targets}
+	provider := &snapshotSequence{}
+	for _, target := range targets {
+		stopped.Evidence = append(stopped.Evidence, PM2StoppedEvidence{PMID: target.PMID, OriginalPID: target.PID, Port: target.Port, StartTicks: target.StartTicks, StopVerified: true})
+	}
+	for index := len(targets) - 1; index >= 0; index-- {
+		target := targets[index]
+		provider.items = append(provider.items, recoverySnapshot(target, "stopped", 0, 0), recoverySnapshot(target, "stopped", 0, 0), recoverySnapshot(target, "online", 100+index, 100+uint64(index)))
+	}
+	runner := &recoveryRunner{}
+	recovery, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: runner}, StopProofTimeout: 50 * time.Millisecond, StopProofInterval: time.Millisecond}).Recover(context.Background(), stopped)
+	if err != nil || !recovery.Verified || recovery.Recovered != 3 || strings.Join(runner.commands, ",") != "start:3,start:2,start:1" {
+		t.Fatalf("recovery = %#v, commands = %v, err = %v", recovery, runner.commands, err)
+	}
+}
 func TestPM2QuiescerRecoverRejectsUnsafeRecoveryBoundaries(t *testing.T) {
 	target := PM2ProcessIdentity{PMID: 2, Name: "node", PID: 22, CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", RuntimeExecPath: "/usr/local/bin/node", Port: 9090, StartTicks: 20}
 	stopped := PM2Quiescence{Processes: []PM2ProcessIdentity{target}, Evidence: []PM2StoppedEvidence{{PMID: 2, OriginalPID: 22, Port: 9090, StartTicks: 20, StopVerified: true}}}
@@ -348,7 +418,7 @@ func TestPM2QuiescerRecoverRejectsUnsafeRecoveryBoundaries(t *testing.T) {
 	competing.Sockets = []SocketOwner{{PID: 99, Port: 9090}}
 	assertUnsafe := func(name string, snapshots []PM2Snapshot, runner *recoveryRunner, attempted int) {
 		t.Run(name, func(t *testing.T) {
-			q := PM2Quiescer{Snapshots: &snapshotSequence{items: snapshots}, Controller: PM2Controller{Runner: runner}}
+			q := PM2Quiescer{Snapshots: &snapshotSequence{items: snapshots}, Controller: PM2Controller{Runner: runner}, StopProofTimeout: time.Millisecond, StopProofInterval: time.Millisecond}
 			recovery, err := q.Recover(context.Background(), stopped)
 			if err == nil || recovery.Verified || recovery.Attempted != attempted || len(runner.commands) != attempted {
 				t.Fatalf("recovery = %#v, commands = %#v, err = %v", recovery, runner.commands, err)
@@ -359,7 +429,13 @@ func TestPM2QuiescerRecoverRejectsUnsafeRecoveryBoundaries(t *testing.T) {
 	assertUnsafe("PM2 executable drift", []PM2Snapshot{pm2ExecDrift}, &recoveryRunner{}, 0)
 	assertUnsafe("PM2 name drift", []PM2Snapshot{nameDrift}, &recoveryRunner{}, 0)
 	assertUnsafe("competing port owner", []PM2Snapshot{competing}, &recoveryRunner{}, 0)
-	assertUnsafe("failed start has no retry", []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20)}, &recoveryRunner{err: errors.New("failed")}, 1)
+	t.Run("failed start has no retry and safe diagnostic", func(t *testing.T) {
+		runner := &recoveryRunner{err: errors.New("DATABASE_URL=secret")}
+		recovery, err := (PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20)}}, Controller: PM2Controller{Runner: runner}}).Recover(context.Background(), stopped)
+		if err == nil || recovery.Attempted != 1 || recovery.Recovered != 0 || recovery.Diagnostic == nil || recovery.Diagnostic.Stage != "recovery-start" || recovery.Diagnostic.Operation != "pm2-start" || recovery.Diagnostic.Cause != "execution-failed" || strings.Contains(recovery.Diagnostic.String(), "DATABASE_URL") {
+			t.Fatalf("recovery = %#v, commands = %#v, err = %v", recovery, runner.commands, err)
+		}
+	})
 	assertUnsafe("original pid is not a new process", []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20), recoverySnapshot(target, "online", 22, 20)}, &recoveryRunner{}, 1)
 	assertUnsafe("reused start ticks", []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20), recoverySnapshot(target, "online", 222, 20)}, &recoveryRunner{}, 1)
 	assertUnsafe("restarted runtime drift", []PM2Snapshot{recoverySnapshot(target, "stopped", 22, 20), runtimeDrift}, &recoveryRunner{}, 1)
@@ -445,10 +521,14 @@ func (blockingSnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, erro
 }
 
 func (s *snapshotSequence) Snapshot(context.Context) (PM2Snapshot, error) {
-	value := s.items[s.next]
+	index := s.next
+	if index >= len(s.items) {
+		index = len(s.items) - 1
+	}
+	value := s.items[index]
 	var err error
-	if s.next < len(s.errs) {
-		err = s.errs[s.next]
+	if index < len(s.errs) {
+		err = s.errs[index]
 	}
 	s.next++
 	return value, err
