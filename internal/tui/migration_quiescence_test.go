@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/migration"
@@ -179,11 +180,10 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 	view := updated.(Model).View()
 	for _, want := range []string{
 		"pm2-observation-unavailable",
-		"stage=initial-snapshot",
-		"operation=pm2-jlist",
-		"command=sudo -n pm2 jlist",
-		"cause=exit-1",
-		"stderr=sudo authentication required",
+		"Stage: initial-snapshot",
+		"Operation: pm2-jlist",
+		"Command: sudo -n pm2 jlist",
+		"Cause: exit-1",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("terminal view %q does not contain %q", view, want)
@@ -229,12 +229,12 @@ func TestPM2InvalidSuccessfulOutputDiagnosticReachesMigrationTerminal(t *testing
 				t.Fatalf("terminal view missing status: %q", view)
 			}
 			if tt.debug {
-				for _, want := range []string{"stage=initial-snapshot", "operation=pm2-jlist", "command=sudo -n pm2 jlist", "cause=output-invalid"} {
+				for _, want := range []string{"Stage: initial-snapshot", "Operation: pm2-jlist", "Command: sudo -n pm2 jlist", "Cause: output-invalid"} {
 					if !strings.Contains(view, want) {
 						t.Fatalf("terminal view %q does not contain %q", view, want)
 					}
 				}
-			} else if strings.Contains(view, "Observation diagnostic:") {
+			} else if strings.Contains(view, "Debug:") {
 				t.Fatalf("normal mode exposed observation diagnostic: %q", view)
 			}
 			for _, forbidden := range []string{"DATABASE_URL", "postgres://secret", "TOKEN=secret", "pm2_env"} {
@@ -258,7 +258,7 @@ func TestPM2StopProofTerminalDiagnosticsRespectDebugMode(t *testing.T) {
 			name:       "debug command failure",
 			debug:      true,
 			diagnostic: &installation.PM2ObservationDiagnostic{Stage: "stop-proof-snapshot", Operation: "pm2-jlist", Command: "sudo -n pm2 jlist", Cause: "exit-1", Stderr: secret},
-			want:       []string{"pm2-stop-unproven", "command=sudo -n pm2 jlist", "cause=exit-1"},
+			want:       []string{"pm2-stop-unproven", "Command: sudo -n pm2 jlist", "Cause: exit-1"},
 		},
 		{
 			name:       "debug timeout",
@@ -293,6 +293,46 @@ func TestPM2StopProofTerminalDiagnosticsRespectDebugMode(t *testing.T) {
 				t.Fatalf("normal mode exposed command diagnostic: %q", view)
 			}
 		})
+	}
+}
+
+func TestMigrationTerminalViewUsesBoundedStructuredDiagnostics(t *testing.T) {
+	const secret = "DATABASE_URL=postgres://secret"
+	deps := buildTestDeps()
+	deps.Debug = true
+	m := NewModel(deps)
+	m.state = StateMigrationQuiescence
+	m.width = 48
+	diagnostic := &installation.PM2ObservationDiagnostic{
+		Stage:     "stop-proof-snapshot",
+		Operation: "pm2-jlist",
+		Command:   "sudo -n pm2 jlist",
+		Cause:     "representative-safe-cause-that-must-wrap-without-horizontal-clipping",
+		Stderr:    secret,
+	}
+	updated, _ := m.Update(MigrationQuiescenceCompletedMsg{Err: installation.QuiescenceError{Code: "pm2-stop-unproven", Diagnostic: diagnostic}})
+	view := updated.(Model).View()
+
+	for _, line := range []string{"Migration did not complete.", "Recovery status: pm2-stop-unproven", "Stage: stop-proof-snapshot", "Operation: pm2-jlist", "Command: sudo -n pm2 jlist", "Cause:"} {
+		if !strings.Contains(view, line) {
+			t.Fatalf("view %q does not contain separate line %q", view, line)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if width := lipgloss.Width(line); width > m.width {
+			t.Fatalf("line width = %d, want <= %d: %q", width, m.width, line)
+		}
+	}
+	for _, forbidden := range []string{secret, "postgres://secret", "DATABASE_URL"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("view leaked %q: %q", forbidden, view)
+		}
+	}
+
+	m.width = 0
+	updated, _ = m.Update(MigrationQuiescenceCompletedMsg{Err: installation.QuiescenceError{Code: "pm2-stop-unproven", Diagnostic: diagnostic}})
+	if zeroWidthView := updated.(Model).View(); !strings.Contains(zeroWidthView, "Recovery status: pm2-stop-unproven") {
+		t.Fatalf("zero-width view is unreadable: %q", zeroWidthView)
 	}
 }
 
