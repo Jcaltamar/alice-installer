@@ -330,7 +330,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 			backupRoot := "/opt/alice/backups/"
 			executor := migration.OSBinaryExecutor{}
 			migrationDocker := migration.SudoDockerExecutor{Executor: executor}
-			pm2Runner := &platform.OSCommandRunner{}
+			pm2Runner := installation.RootPM2Boundary{Runner: &platform.OSCommandRunner{}}
 			deps.MigrationAuthenticator = tui.SudoMigrationAuthenticator{}
 			deps.LegacyBackupAction = migration.BackupAction{
 				Resolver:  migration.Resolver{},
@@ -357,7 +357,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 						Snapshots: installation.LinuxPM2SnapshotProvider{
 							Inventory: installation.LinuxPM2Inventory{Runner: pm2Runner},
 							Sockets:   installation.LinuxSocketSnapshot{Runner: pm2Runner},
-							Proc:      installation.LinuxProcIdentity{},
+							Proc:      pm2Runner,
 						},
 						Controller: installation.PM2Controller{Runner: pm2Runner},
 					},

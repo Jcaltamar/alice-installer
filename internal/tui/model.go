@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -489,10 +488,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.quiescenceCancel = nil
 		if msg.Err != nil || msg.Lease == nil {
 			m.state = StateMigrationResult
-			m.migrationRecoveryCode = "pm2-quiescence-unavailable"
-			if errors.Is(msg.Err, migration.ErrSudoDockerPermission) {
-				m.migrationRecoveryCode = migration.SudoDockerPermissionCode
-			}
+			m.migrationRecoveryCode = boundedQuiescenceCode(msg.Err)
 			return m, nil
 		}
 		m.migrationLease = msg.Lease

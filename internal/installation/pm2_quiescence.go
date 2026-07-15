@@ -46,6 +46,10 @@ type PM2Recovery struct {
 	Code                 string
 }
 
+type QuiescenceError struct{ Code string }
+
+func (e QuiescenceError) Error() string { return e.Code }
+
 // LegacyPM2Quiescer lets migration own a lease without PM2 command construction.
 type LegacyPM2Quiescer interface {
 	Quiesce(context.Context) (PM2Quiescence, error)
@@ -58,6 +62,7 @@ type pm2JSONRecord struct {
 	ExecPath string `json:"pm_exec_path"`
 	Env      struct {
 		CWD    string `json:"cwd"`
+		PMCWD  string `json:"pm_cwd"`
 		Status string `json:"status"`
 		PID    int    `json:"pid"`
 		Exec   string `json:"pm_exec_path"`
@@ -130,6 +135,13 @@ func ParsePM2Inventory(data []byte) ([]PM2Record, error) {
 	seenIDs, seenPIDs := map[int64]bool{}, map[int]bool{}
 	records := make([]PM2Record, 0, len(raw))
 	for _, item := range raw {
+		cwd := item.Env.CWD
+		if cwd != "" && item.Env.PMCWD != "" && !samePath(cwd, item.Env.PMCWD) {
+			return nil, errors.New("pm2 inventory is ambiguous")
+		}
+		if cwd == "" {
+			cwd = item.Env.PMCWD
+		}
 		pid := item.PID
 		if item.PID > 0 && item.Env.PID > 0 && item.PID != item.Env.PID {
 			return nil, errors.New("pm2 inventory is ambiguous")
@@ -144,11 +156,11 @@ func ParsePM2Inventory(data []byte) ([]PM2Record, error) {
 		if execPath == "" {
 			execPath = item.Env.Exec
 		}
-		if item.ID <= 0 || pid <= 0 || item.Name == "" || item.Env.CWD == "" || execPath == "" || item.Env.Status == "" || seenIDs[item.ID] || seenPIDs[pid] {
+		if item.ID < 0 || pid <= 0 || item.Name == "" || cwd == "" || execPath == "" || item.Env.Status == "" || seenIDs[item.ID] || seenPIDs[pid] {
 			return nil, errors.New("pm2 inventory is ambiguous")
 		}
 		seenIDs[item.ID], seenPIDs[pid] = true, true
-		records = append(records, PM2Record{ID: item.ID, PID: pid, Name: item.Name, CWD: filepath.Clean(item.Env.CWD), ExecPath: filepath.Clean(execPath), Status: item.Env.Status})
+		records = append(records, PM2Record{ID: item.ID, PID: pid, Name: item.Name, CWD: filepath.Clean(cwd), ExecPath: filepath.Clean(execPath), Status: item.Env.Status})
 	}
 	return records, nil
 }
@@ -162,8 +174,11 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 	}
 	selected := make([]PM2ProcessIdentity, 0)
 	for _, record := range records {
+		if record.ID < 0 {
+			continue
+		}
 		port, ok := owners[record.PID]
-		root, allowed := allowedPM2Port(record.CWD, port.Port)
+		root, allowed := allowedPM2Contract(record.Name, record.CWD, port.Port)
 		if !ok || !allowed || record.Status != "online" {
 			continue
 		}
@@ -179,12 +194,15 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 	sort.Slice(selected, func(i, j int) bool { return selected[i].PMID < selected[j].PMID })
 	return selected, nil
 }
-func allowedPM2Port(cwd string, port uint16) (string, bool) {
-	if within(guardianRoot, cwd) && port == 8080 {
-		return guardianRoot, true
-	}
-	if within(backendRoot, cwd) && (port == 9090 || port == 4550) {
-		return backendRoot, true
+func allowedPM2Contract(name, cwd string, port uint16) (string, bool) {
+	contracts := []struct {
+		name, cwd string
+		port      uint16
+	}{{"front-guardian", guardianRoot, 8080}, {"ws", backendRoot + "/websocket", 4550}, {"node", backendRoot + "/node", 9090}}
+	for _, contract := range contracts {
+		if name == contract.name && samePath(cwd, contract.cwd) && port == contract.port {
+			return contract.cwd, true
+		}
 	}
 	return "", false
 }
@@ -197,8 +215,11 @@ func samePath(left, right string) bool { return filepath.Clean(left) == filepath
 type PM2Controller struct{ Runner CommandRunner }
 
 func (c PM2Controller) Stop(ctx context.Context, identity PM2ProcessIdentity) error {
-	if c.Runner == nil || identity.PMID <= 0 {
+	if c.Runner == nil || identity.PMID < 0 {
 		return errors.New("pm2 stop target is invalid")
+	}
+	if boundary, ok := c.Runner.(RootPM2Boundary); ok {
+		return boundary.mutate(ctx, "stop", identity)
 	}
 	_, _, err := c.Runner.Run(ctx, "pm2", "stop", strconv.FormatInt(identity.PMID, 10))
 	if err != nil {
@@ -208,8 +229,11 @@ func (c PM2Controller) Stop(ctx context.Context, identity PM2ProcessIdentity) er
 }
 
 func (c PM2Controller) Start(ctx context.Context, identity PM2ProcessIdentity) error {
-	if c.Runner == nil || identity.PMID <= 0 {
+	if c.Runner == nil || identity.PMID < 0 {
 		return errors.New("pm2 recovery target is invalid")
+	}
+	if boundary, ok := c.Runner.(RootPM2Boundary); ok {
+		return boundary.mutate(ctx, "start", identity)
 	}
 	_, _, err := c.Runner.Run(ctx, "pm2", "start", strconv.FormatInt(identity.PMID, 10))
 	if err != nil {
@@ -234,34 +258,34 @@ type PM2Quiescer struct {
 func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 	initial, err := q.snapshot(ctx)
 	if err != nil {
-		return PM2Quiescence{}, err
+		return PM2Quiescence{}, QuiescenceError{Code: "pm2-observation-unavailable"}
 	}
 	pending, err := CorrelatePM2(initial.Records, initial.Sockets, initial.Proc)
 	if err != nil {
-		return PM2Quiescence{}, err
+		return PM2Quiescence{}, QuiescenceError{Code: "pm2-correlation-failed"}
 	}
 	stopped := PM2Quiescence{Processes: append([]PM2ProcessIdentity(nil), pending...)}
 	for len(pending) > 0 {
 		current, err := q.snapshot(ctx)
 		if err != nil {
-			return stopped, err
+			return stopped, QuiescenceError{Code: "pm2-observation-unavailable"}
 		}
 		active, err := CorrelatePM2(current.Records, current.Sockets, current.Proc)
 		if err != nil || !sameIdentities(active, pending) {
-			return stopped, errors.New("pm2 state changed before stop")
+			return stopped, QuiescenceError{Code: "pm2-state-changed"}
 		}
 		target := pending[0]
 		if err := q.Controller.Stop(ctx, target); err != nil {
-			return stopped, err
+			return stopped, QuiescenceError{Code: "pm2-stop-failed"}
 		}
 		if after, err := q.snapshot(ctx); err != nil || !stoppedAndReleased(after, target) {
-			return stopped, errors.New("pm2 stop was not proven")
+			return stopped, QuiescenceError{Code: "pm2-stop-unproven"}
 		}
 		stopped.Evidence = append(stopped.Evidence, PM2StoppedEvidence{PMID: target.PMID, OriginalPID: target.PID, Port: target.Port, StartTicks: target.StartTicks, StopVerified: true})
 		pending = pending[1:]
 	}
 	if final, err := q.snapshot(ctx); err != nil || !stoppedAndReleased(final, stopped.Processes...) {
-		return stopped, errors.New("pm2 final stop state was not proven")
+		return stopped, QuiescenceError{Code: "pm2-final-state-unproven"}
 	}
 	return stopped, nil
 }
@@ -291,7 +315,7 @@ func (q PM2Quiescer) Recover(ctx context.Context, stopped PM2Quiescence) (PM2Rec
 func acknowledgedRecoveryTargets(stopped PM2Quiescence) ([]PM2ProcessIdentity, bool) {
 	byID := make(map[int64]PM2ProcessIdentity, len(stopped.Processes))
 	for _, identity := range stopped.Processes {
-		if identity.PMID <= 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" || byID[identity.PMID].PMID != 0 {
+		if _, duplicate := byID[identity.PMID]; identity.PMID < 0 || identity.PID <= 0 || identity.Port == 0 || identity.StartTicks == 0 || identity.CWD == "" || identity.ExecPath == "" || duplicate {
 			return nil, false
 		}
 		byID[identity.PMID] = identity
@@ -330,16 +354,18 @@ func recoverySnapshotProves(snapshot PM2Snapshot, target PM2ProcessIdentity, sta
 }
 func exactRecoveryRecord(records []PM2Record, target PM2ProcessIdentity) (PM2Record, bool) {
 	var match PM2Record
+	found := false
 	for _, record := range records {
 		if record.ID != target.PMID {
 			continue
 		}
-		if match.ID != 0 || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
+		if found || !samePath(record.CWD, target.CWD) || !samePath(record.ExecPath, target.ExecPath) {
 			return PM2Record{}, false
 		}
 		match = record
+		found = true
 	}
-	return match, match.ID != 0
+	return match, found
 }
 func (q PM2Quiescer) snapshot(ctx context.Context) (PM2Snapshot, error) {
 	if q.Snapshots == nil || q.Controller.Runner == nil {

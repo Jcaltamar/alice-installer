@@ -129,6 +129,26 @@ func TestMigrationQuiescenceFailureBlocksBeforePreflight(t *testing.T) {
 	}
 }
 
+func TestBoundedQuiescenceFailureCodes(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want string
+	}{
+		{installation.QuiescenceError{Code: "pm2-observation-unavailable"}, "pm2-observation-unavailable"},
+		{installation.QuiescenceError{Code: "pm2-correlation-failed"}, "pm2-correlation-failed"},
+		{installation.QuiescenceError{Code: "pm2-state-changed"}, "pm2-state-changed"},
+		{installation.QuiescenceError{Code: "pm2-stop-failed"}, "pm2-stop-failed"},
+		{installation.QuiescenceError{Code: "pm2-stop-unproven"}, "pm2-stop-unproven"},
+		{installation.QuiescenceError{Code: "pm2-final-state-unproven"}, "pm2-final-state-unproven"},
+		{installation.QuiescenceError{Code: "raw-secret"}, "pm2-quiescence-unavailable"},
+		{errors.New("raw-secret"), "pm2-quiescence-unavailable"},
+	} {
+		if got := boundedQuiescenceCode(tt.err); got != tt.want {
+			t.Fatalf("code = %q, want %q", got, tt.want)
+		}
+	}
+}
+
 func TestMigrationLiveLeaseTerminalPathsRecoverExceptInstallSuccess(t *testing.T) {
 	for _, msg := range []tea.Msg{
 		InstallFailureMsg{Stage: "deploy", Err: errors.New("failure")},

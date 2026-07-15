@@ -111,6 +111,20 @@ func boundedRecoveryCode(recovery installation.PM2Recovery, err error) string {
 	return "pm2-recovery-unproven"
 }
 
+func boundedQuiescenceCode(err error) string {
+	var failure installation.QuiescenceError
+	if errors.As(err, &failure) {
+		switch failure.Code {
+		case "pm2-observation-unavailable", "pm2-correlation-failed", "pm2-state-changed", "pm2-stop-failed", "pm2-stop-unproven", "pm2-final-state-unproven":
+			return failure.Code
+		}
+	}
+	if errors.Is(err, migration.ErrSudoDockerPermission) {
+		return migration.SudoDockerPermissionCode
+	}
+	return "pm2-quiescence-unavailable"
+}
+
 func (m Model) migrationQuiescenceView() string {
 	return m.deps.Theme.TextMuted.Render("Quiescing confirmed legacy services and applying the selected PostgreSQL disposition before installation. Press Escape to cancel safely.\n")
 }
