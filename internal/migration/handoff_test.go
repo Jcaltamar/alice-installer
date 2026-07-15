@@ -59,7 +59,7 @@ func TestPreInstallMigrationCoordinatorCompletionConsumesLeaseOnce(t *testing.T)
 	}
 }
 func acknowledgedQuiescence() installation.PM2Quiescence {
-	return installation.PM2Quiescence{Processes: []installation.PM2ProcessIdentity{{PMID: 1, PID: 10, CWD: "/opt/alice-guardian", ExecPath: "/opt/alice-guardian/app", Port: 8080, StartTicks: 1}}, Evidence: []installation.PM2StoppedEvidence{{PMID: 1, OriginalPID: 10, Port: 8080, StartTicks: 1, StopVerified: true}}}
+	return installation.PM2Quiescence{Processes: []installation.PM2ProcessIdentity{{PMID: 1, PID: 10, CWD: "/opt/alice-guardian", ExecPath: "/usr/bin/bash", RuntimeExecPath: "/usr/local/bin/node", Port: 8080, StartTicks: 1}}, Evidence: []installation.PM2StoppedEvidence{{PMID: 1, OriginalPID: 10, Port: 8080, StartTicks: 1, StopVerified: true}}}
 }
 
 type handoffBackup struct {
