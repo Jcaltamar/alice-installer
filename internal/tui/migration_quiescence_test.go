@@ -28,6 +28,15 @@ func (failingRootObservationRunner) Run(context.Context, string, ...string) ([]b
 	return []byte(`[{"pm2_env":{"DATABASE_URL":"postgres://secret"}}]`), []byte("sudo: a password is required\n"), errors.New("exit status 1")
 }
 
+type invalidRootObservationRunner struct{}
+
+func (invalidRootObservationRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	if name == "sudo" && strings.Join(args, " ") == "-n pm2 jlist" {
+		return []byte(`[{"pm2_env":{"DATABASE_URL":"postgres://secret"}}]`), []byte("TOKEN=secret"), nil
+	}
+	return nil, nil, errors.New("unexpected command")
+}
+
 type unusedSocketSnapshot struct{}
 
 func (unusedSocketSnapshot) Snapshot(context.Context) ([]installation.SocketOwner, error) {
@@ -184,6 +193,56 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 		if strings.Contains(view, forbidden) {
 			t.Fatalf("terminal view leaked %q: %q", forbidden, view)
 		}
+	}
+}
+
+func TestPM2InvalidSuccessfulOutputDiagnosticReachesMigrationTerminal(t *testing.T) {
+	root := installation.RootPM2Boundary{Runner: invalidRootObservationRunner{}}
+	quiescer := installation.PM2Quiescer{
+		Snapshots: installation.LinuxPM2SnapshotProvider{
+			Inventory: installation.LinuxPM2Inventory{Runner: root},
+			Sockets:   unusedSocketSnapshot{},
+			Proc:      unusedProcIdentity{},
+		},
+		Controller: installation.PM2Controller{Runner: root},
+	}
+	_, err := quiescer.Quiesce(context.Background())
+	if err == nil {
+		t.Fatal("Quiesce() succeeded, want invalid observation failure")
+	}
+
+	for _, tt := range []struct {
+		name  string
+		debug bool
+	}{
+		{name: "debug includes safe validation diagnostic", debug: true},
+		{name: "normal mode remains terse"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := buildTestDeps()
+			deps.Debug = tt.debug
+			m := NewModel(deps)
+			m.state = StateMigrationQuiescence
+			updated, _ := m.Update(MigrationQuiescenceCompletedMsg{Err: err})
+			view := updated.(Model).View()
+			if !strings.Contains(view, "pm2-observation-unavailable") {
+				t.Fatalf("terminal view missing status: %q", view)
+			}
+			if tt.debug {
+				for _, want := range []string{"stage=initial-snapshot", "operation=pm2-jlist", "command=sudo -n pm2 jlist", "cause=output-invalid"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("terminal view %q does not contain %q", view, want)
+					}
+				}
+			} else if strings.Contains(view, "Observation diagnostic:") {
+				t.Fatalf("normal mode exposed observation diagnostic: %q", view)
+			}
+			for _, forbidden := range []string{"DATABASE_URL", "postgres://secret", "TOKEN=secret", "pm2_env"} {
+				if strings.Contains(view, forbidden) {
+					t.Fatalf("terminal view leaked %q: %q", forbidden, view)
+				}
+			}
+		})
 	}
 }
 

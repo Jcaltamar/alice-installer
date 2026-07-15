@@ -31,6 +31,19 @@ func TestLinuxPM2InventoryUsesFixedBoundedRedactedAcquisition(t *testing.T) {
 			if strings.Contains(errorText(err), secret) {
 				t.Fatal("raw command output leaked through error")
 			}
+			if tt.wantErr == "pm2 inventory output is invalid" || tt.wantErr == "pm2 inventory output exceeded limit" {
+				var observation pm2ObservationError
+				if !errors.As(err, &observation) {
+					t.Fatalf("error = %v, want observation diagnostic", err)
+				}
+				wantCause := "output-invalid"
+				if tt.wantErr == "pm2 inventory output exceeded limit" {
+					wantCause = "output-too-large"
+				}
+				if observation.Diagnostic.Operation != "pm2-jlist" || observation.Diagnostic.Command != "sudo -n pm2 jlist" || observation.Diagnostic.Cause != wantCause {
+					t.Fatalf("diagnostic = %#v", observation.Diagnostic)
+				}
+			}
 			if tt.runner.name != "pm2" || tt.runner.args != "jlist" {
 				t.Fatalf("command = %q %q", tt.runner.name, tt.runner.args)
 			}

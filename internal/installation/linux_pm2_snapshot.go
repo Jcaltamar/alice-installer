@@ -48,20 +48,20 @@ func (p LinuxPM2SnapshotProvider) Snapshot(ctx context.Context) (PM2Snapshot, er
 			return PM2Snapshot{}, err
 		}
 		if record.ID < 0 || record.PID <= 0 || record.CWD == "" || record.ExecPath == "" || record.Status == "" {
-			return PM2Snapshot{}, errors.New("pm2 record is incomplete")
+			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-record-incomplete")
 		}
 		if _, duplicate := proc[record.PID]; duplicate {
-			return PM2Snapshot{}, errors.New("pm2 process identity is ambiguous")
+			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-identity-ambiguous")
 		}
 		identity, err := p.Proc.Read(ctx, record.PID)
 		if err != nil {
 			return PM2Snapshot{}, fmt.Errorf("proc identity is unavailable: %w", err)
 		}
 		if identity.CWD == "" || identity.ExecPath == "" || identity.StartTicks == 0 {
-			return PM2Snapshot{}, errors.New("proc identity is unavailable")
+			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "proc-identity-incomplete")
 		}
 		if !samePath(record.CWD, identity.CWD) {
-			return PM2Snapshot{}, errors.New("pm2 and proc identity disagree")
+			return PM2Snapshot{}, observationOutputError("snapshot-validation", "", "pm2-proc-identity-mismatch")
 		}
 		proc[record.PID] = identity
 	}
