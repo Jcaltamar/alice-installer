@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,6 +54,47 @@ func TestPullModelFeedsProgressMessages(t *testing.T) {
 	}
 	if m.services["websocket"] != "Pulled" {
 		t.Errorf("services[websocket] = %q, want Pulled", m.services["websocket"])
+	}
+}
+
+func TestPullModelRendersReportedProgressWithoutInventingPercentage(t *testing.T) {
+	tests := []struct {
+		name       string
+		msg        compose.PullProgressMsg
+		wantStatus string
+		notInView  string
+	}{
+		{
+			name:       "reported byte progress",
+			msg:        compose.PullProgressMsg{Service: "alice/backend:latest", Status: "Downloading", Percent: 42, HasPercent: true},
+			wantStatus: "Downloading 42%",
+		},
+		{
+			name:       "unknown total",
+			msg:        compose.PullProgressMsg{Service: "alice/backend:latest", Status: "Downloading"},
+			wantStatus: "Downloading",
+			notInView:  "0%",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := buildPullModel(&compose.FakeComposeRunner{})
+			m, cmd := m.Update(tt.msg)
+			if cmd == nil {
+				t.Fatal("Update() did not reschedule progress drain")
+			}
+			if got := m.services[tt.msg.Service]; got != tt.wantStatus {
+				t.Fatalf("service status = %q, want %q", got, tt.wantStatus)
+			}
+			view := m.View()
+			if !strings.Contains(view, tt.wantStatus) {
+				t.Fatalf("View() = %q, want status %q", view, tt.wantStatus)
+			}
+			if tt.notInView != "" && strings.Contains(view, tt.notInView) {
+				t.Fatalf("View() = %q, must not contain %q", view, tt.notInView)
+			}
+		})
 	}
 }
 
