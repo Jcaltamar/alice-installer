@@ -131,8 +131,7 @@ func (osCmdExecutor) Run(name string, args ...string) ([]byte, error) {
 
 // Run executes the full install sequence in headless (unattended) mode.
 // All progress is written to out using "[stage] message" lines.
-// Returns nil on success, or a descriptive error (possibly ErrReloginRequired
-// or ErrPreflightStillFailing) on failure.
+// Returns nil on success or a descriptive error on failure.
 func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) error {
 	exec := deps.CmdExecutor
 	if exec == nil {
@@ -170,20 +169,7 @@ func Run(ctx context.Context, cfg Config, deps Dependencies, out io.Writer) erro
 			return fmt.Errorf("preflight: fixable failures found; re-run with --accept-all-bootstrap to auto-fix")
 		}
 
-		// Check for docker_group_add before running — it requires a re-login.
-		for _, a := range fixable {
-			if a.ID == bootstrap.ActionIDDockerGroup {
-				// Run the action first so the group is actually added.
-				logf(out, "bootstrap", "executing: %s %s", a.Command, strings.Join(a.Args, " "))
-				if out2, err := exec.Run(a.Command, a.Args...); err != nil {
-					return fmt.Errorf("bootstrap: action %q failed: %w\n%s", a.ID, err, string(out2))
-				}
-				logf(out, "bootstrap", "action %q succeeded", a.ID)
-				return fmt.Errorf("%w", ErrReloginRequired)
-			}
-		}
-
-		// Run all other fixable actions.
+		// Run all fixable actions.
 		for _, a := range fixable {
 			logf(out, "bootstrap", "executing: %s %s", a.Command, strings.Join(a.Args, " "))
 			if out2, runErr := exec.Run(a.Command, a.Args...); runErr != nil {

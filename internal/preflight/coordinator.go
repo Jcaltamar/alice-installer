@@ -188,7 +188,7 @@ func (c Coordinator) checkDockerDaemon(ctx context.Context) CheckResult {
 			Status:      StatusFail,
 			Title:       "Docker daemon unreachable",
 			Detail:      err.Error(),
-			Remediation: "Start Docker (`sudo systemctl start docker`) and ensure your user is in the `docker` group.",
+			Remediation: "Start Docker (`sudo systemctl start docker`) and verify sudo authorization with `sudo -v`.",
 		}
 	}
 	return CheckResult{

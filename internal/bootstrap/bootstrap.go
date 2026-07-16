@@ -198,8 +198,7 @@ func BuildUserDirAction(id, dir string) Action {
 //
 //  1. docker_install (if Docker binary is missing)
 //  2. dir-creation actions (media, config, workspace)
-//  3. systemd_start_docker (if Docker present, user in group, systemd available)
-//  4. docker_group_add (if Docker present but user not in docker group)
+//  3. systemd_start_docker (if Docker is present and systemd is available)
 func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, configDir, workspaceDir string) (fixable []Action, nonFixable []preflight.CheckResult) {
 	username := env.UserName
 	if username == "" {
@@ -209,7 +208,6 @@ func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, confi
 	var dockerInstall []Action
 	var dirActions []Action
 	var systemdActions []Action
-	var groupActions []Action
 
 	for _, item := range report.Items {
 		if item.Status != preflight.StatusFail {
@@ -220,8 +218,6 @@ func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, confi
 			switch {
 			case !env.DockerBinaryPresent:
 				dockerInstall = append(dockerInstall, DockerInstallAction())
-			case !env.UserInDockerGroup:
-				groupActions = append(groupActions, DockerGroupAddAction(username))
 			case env.SystemdPresent:
 				systemdActions = append(systemdActions, SystemdStartDockerAction())
 			default:
@@ -245,7 +241,6 @@ func ClassifyBlockers(report preflight.Report, env BootstrapEnv, mediaDir, confi
 	fixable = append(fixable, dockerInstall...)
 	fixable = append(fixable, dirActions...)
 	fixable = append(fixable, systemdActions...)
-	fixable = append(fixable, groupActions...)
 
 	return fixable, nonFixable
 }

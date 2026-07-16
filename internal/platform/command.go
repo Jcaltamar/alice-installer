@@ -3,8 +3,43 @@ package platform
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os/exec"
 )
+
+var ErrNonDockerCommand = fmt.Errorf("sudo docker runner rejected non-docker command")
+
+// SudoDockerCommandRunner is a closed privilege boundary for buffered Docker commands.
+type SudoDockerCommandRunner struct {
+	Runner CommandRunner
+}
+
+func (r SudoDockerCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	if name != "docker" {
+		return nil, nil, ErrNonDockerCommand
+	}
+	runner := r.Runner
+	if runner == nil {
+		runner = &OSCommandRunner{}
+	}
+	return runner.Run(ctx, "sudo", append([]string{"-n", "docker"}, args...)...)
+}
+
+// SudoDockerStreamingCommandRunner is the streaming equivalent of SudoDockerCommandRunner.
+type SudoDockerStreamingCommandRunner struct {
+	Runner StreamingCommandRunner
+}
+
+func (r SudoDockerStreamingCommandRunner) Stream(ctx context.Context, onStdout, onStderr func(string), name string, args ...string) error {
+	if name != "docker" {
+		return ErrNonDockerCommand
+	}
+	runner := r.Runner
+	if runner == nil {
+		runner = &OSStreamingCommandRunner{}
+	}
+	return runner.Stream(ctx, onStdout, onStderr, "sudo", append([]string{"-n", "docker"}, args...)...)
+}
 
 // OSCommandRunner is the exported production CommandRunner backed by os/exec.
 // It is the default used by CLIDocker and other packages that need shelling out.

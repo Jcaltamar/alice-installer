@@ -229,7 +229,7 @@ func TestClassifyBlockersDockerPresentNoBinaryCheck(t *testing.T) {
 // T-DB-011/012: User-not-in-group case
 // ---------------------------------------------------------------------------
 
-func TestClassifyBlockersUserNotInGroupEmitsGroupAdd(t *testing.T) {
+func TestClassifyBlockersDoesNotRequireDockerGroup(t *testing.T) {
 	report := preflight.Report{
 		Items: []preflight.CheckResult{
 			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusFail, Title: "Docker"},
@@ -246,8 +246,8 @@ func TestClassifyBlockersUserNotInGroupEmitsGroupAdd(t *testing.T) {
 	if len(fixable) != 1 {
 		t.Fatalf("fixable count = %d, want 1", len(fixable))
 	}
-	if fixable[0].ID != ActionIDDockerGroup {
-		t.Errorf("fixable[0].ID = %q, want %q", fixable[0].ID, ActionIDDockerGroup)
+	if fixable[0].ID != ActionIDSystemdStart {
+		t.Errorf("fixable[0].ID = %q, want %q", fixable[0].ID, ActionIDSystemdStart)
 	}
 	if len(nonFixable) != 0 {
 		t.Errorf("nonFixable count = %d, want 0", len(nonFixable))
@@ -255,6 +255,7 @@ func TestClassifyBlockersUserNotInGroupEmitsGroupAdd(t *testing.T) {
 }
 
 func TestClassifyBlockersGroupAddHasPostActionBanner(t *testing.T) {
+	t.Skip("superseded: sudo Docker mode never adds users to the docker group")
 	report := preflight.Report{
 		Items: []preflight.CheckResult{
 			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusFail, Title: "Docker"},
@@ -277,6 +278,7 @@ func TestClassifyBlockersGroupAddHasPostActionBanner(t *testing.T) {
 }
 
 func TestClassifyBlockersGroupAddUsesEnvUsername(t *testing.T) {
+	t.Skip("superseded: sudo Docker mode never adds users to the docker group")
 	report := preflight.Report{
 		Items: []preflight.CheckResult{
 			{ID: preflight.CheckDockerDaemon, Status: preflight.StatusFail, Title: "Docker"},
@@ -399,6 +401,7 @@ func TestClassifyBlockersActionOrdering(t *testing.T) {
 }
 
 func TestClassifyBlockersActionOrderingGroupAddLast(t *testing.T) {
+	t.Skip("superseded: sudo Docker mode never adds users to the docker group")
 	// Config dir fail + docker group fail → dirs first, group_add last
 	report := preflight.Report{
 		Items: []preflight.CheckResult{
