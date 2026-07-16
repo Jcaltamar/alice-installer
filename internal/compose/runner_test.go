@@ -3,11 +3,25 @@ package compose_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jcaltamar/alice-installer/internal/compose"
 	"github.com/jcaltamar/alice-installer/internal/platform"
 )
+
+type stderrStreamingRunner struct {
+	lines []string
+	err   error
+}
+
+func (r stderrStreamingRunner) Stream(_ context.Context, _, onStderr func(string), _ string, _ ...string) error {
+	for _, line := range r.lines {
+		onStderr(line)
+	}
+	return r.err
+}
 
 // ---------------------------------------------------------------------------
 // composeArgs helper
@@ -177,6 +191,23 @@ func TestCLICompose_Up_ErrorPropagated(t *testing.T) {
 	err := c.Up(context.Background(), []string{"docker-compose.yml"}, ".env", ch)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("Up() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCLICompose_Up_CapturesBoundedStderrTail(t *testing.T) {
+	wantErr := errors.New("up failed")
+	lines := make([]string, 25)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("stderr-line-%02d", i+1)
+	}
+	c := compose.NewCLICompose(nil, stderrStreamingRunner{lines: lines, err: wantErr})
+
+	err := c.Up(context.Background(), []string{"docker-compose.yml"}, ".env", make(chan compose.UpProgressMsg, 1))
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Up() error = %v, want wrapped %v", err, wantErr)
+	}
+	if strings.Contains(err.Error(), "stderr-line-05") || !strings.Contains(err.Error(), "stderr-line-06") || !strings.Contains(err.Error(), "stderr-line-25") {
+		t.Fatalf("Up() stderr tail = %q, want only final 20 lines", err)
 	}
 }
 
