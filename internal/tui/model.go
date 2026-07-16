@@ -21,6 +21,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/platform"
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
+	"github.com/jcaltamar/alice-installer/internal/runlog"
 	"github.com/jcaltamar/alice-installer/internal/theme"
 )
 
@@ -77,6 +78,8 @@ type Dependencies struct {
 	Theme                  theme.Theme
 	Version                string
 	Debug                  bool
+	RunLog                 runlog.Logger
+	LogPath                string
 	OS                     platform.OSGuard
 	Arch                   platform.ArchDetector
 	GPU                    platform.GPUDetector
@@ -155,6 +158,7 @@ type Model struct {
 	migrationLease        *migration.PreInstallMigrationLease
 	migrationRecoveryCode string
 	migrationDiagnostic   *installation.PM2ObservationDiagnostic
+	originalFailure       *InstallFailureMsg
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -227,6 +231,14 @@ func NewModel(deps Dependencies) Model {
 	}
 }
 
+func (m *Model) log(event runlog.Event) {
+	if m.deps.RunLog != nil {
+		m.deps.RunLog.Log(event)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func (m *Model) applyMigrationPortPolicy() {
 	var exemptTCP, exemptUDP map[int]struct{}
 	if m.hasLiveMigrationLease() {
@@ -246,7 +258,16 @@ func (m Model) Init() tea.Cmd {
 // Update implements tea.Model.
 // It handles global messages first (window size, quit keys), then dispatches
 // to the active sub-model and processes state-transition messages.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
+	previousState := m.state
+	defer func() {
+		next, ok := model.(Model)
+		if !ok || next.state == previousState {
+			return
+		}
+		next.log(runlog.Event{Event: "tui-transition", Stage: stateName(next.state), Status: "entered"})
+		model = next
+	}()
 	// -----------------------------------------------------------------------
 	// Global handlers
 	// -----------------------------------------------------------------------
@@ -273,6 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.hasLiveMigrationLease() {
 				return m.beginMigrationRecovery()
 			}
+			m.log(runlog.Event{Event: "terminal", Stage: stateName(m.state), Status: "quit", Code: "user-quit"})
 			return m, tea.Quit
 
 		case msg.Type == tea.KeyEsc && m.state == StateBackupRunning:
@@ -283,9 +305,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case msg.Type == tea.KeyEsc && m.state == StateMigrationConfirm:
 			m.state = StateMigrationCancelled
+			m.log(runlog.Event{Event: "terminal", Stage: "migration", Status: "cancelled", Code: "migration-cancelled"})
 			return m, nil
 		case msg.Type == tea.KeyEsc && (m.state == StateMigrationDisposition || m.state == StateMigrationRemoveConfirm):
 			m.state = StateMigrationCancelled
+			m.log(runlog.Event{Event: "terminal", Stage: "migration", Status: "cancelled", Code: "migration-cancelled"})
 			return m, nil
 		case msg.Type == tea.KeyEsc && m.state == StateMigrationQuiescence && m.quiescenceCancel != nil:
 			m.quiescenceCancel()
@@ -298,11 +322,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyEsc && m.hasLiveMigrationLease():
 			return m.beginMigrationRecovery()
 		case msg.Type == tea.KeyEsc && (m.state == StateDetecting || m.state == StateContextMenu):
+			m.log(runlog.Event{Event: "terminal", Stage: stateName(m.state), Status: "quit", Code: "user-quit"})
 			return m, tea.Quit
 
 		case msg.Type == tea.KeyRunes && string(msg.Runes) == "q":
 			if m.state == StateMigrationConfirm {
 				m.state = StateMigrationCancelled
+				m.log(runlog.Event{Event: "terminal", Stage: "migration", Status: "cancelled", Code: "migration-cancelled"})
 				return m, nil
 			}
 			if m.state == StateBackupRunning && m.backupCancel != nil {
@@ -323,6 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// "q" quits from any state EXCEPT the workspace text input.
 			if m.state != StateWorkspaceInput {
+				m.log(runlog.Event{Event: "terminal", Stage: stateName(m.state), Status: "quit", Code: "user-quit"})
 				return m, tea.Quit
 			}
 		}
@@ -382,6 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.migrationEnv = msg.Environment
+		m.log(runlog.Event{Event: "migration-environment", Stage: "environment", Status: "selected", Fields: runlog.Fields{Mode: string(msg.Environment)}})
 		m.state = StateMigrationAuth
 		return m, m.deps.MigrationAuthenticator.Authenticate()
 
@@ -390,10 +418,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Err != nil {
+			m.log(runlog.Event{Event: "migration-auth", Stage: "authentication", Status: "failed", Code: "migration-auth-failed", Fields: runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}})
 			m.state = StateMigrationAuthFailed
 			return m, nil
 		}
 		m.state = StateBackupPreflight
+		m.log(runlog.Event{Event: "migration-auth", Stage: "authentication", Status: "succeeded"})
 		return m, func() tea.Msg {
 			request := m.deps.LegacyBackupRequest
 			request.ConfigEnvironment = string(m.migrationEnv)
@@ -406,11 +436,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Err != nil {
+			m.log(runlog.Event{Event: "backup-preflight", Stage: "backup-preflight", Status: "failed", Code: "backup-preflight-failed", Fields: runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}})
 			m.state = StateBackupResult
 			m.backupResult = migration.BackupPreflightFailureResult(msg.Err)
 			return m, nil
 		}
 		m.backupPlan = msg.Plan
+		m.log(runlog.Event{Event: "backup-preflight", Stage: "backup-preflight", Status: "succeeded"})
 		m.state = StateBackupConfirm
 		return m, nil
 
@@ -468,6 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.backupCancelling = false
 		m.backupProgress = nil
 		m.backupResult = msg.Result
+		m.log(runlog.Event{Event: "backup-result", Stage: "backup", Status: fmt.Sprint(msg.Result.Outcome), Code: msg.Result.FailureCode.String()})
 		if msg.Result.Outcome == migration.BackupValidated {
 			if m.deps.LegacyRestoreAction == nil || m.deps.MigrationHandoff == nil {
 				m.state = StateMigrationBlocked
@@ -484,6 +517,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.containerDisposition = msg.Disposition
+		disposition := "stop"
+		if msg.Disposition == migration.DispositionRemove {
+			disposition = "remove"
+		}
+		m.log(runlog.Event{Event: "container-disposition", Stage: "quiescence", Status: "selected", Fields: runlog.Fields{Disposition: disposition}})
 		if msg.Disposition == migration.DispositionRemove {
 			m.state = StateMigrationRemoveConfirm
 			return m, nil
@@ -504,12 +542,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil || msg.Lease == nil {
 			m.state = StateMigrationResult
 			m.migrationRecoveryCode = boundedQuiescenceCode(msg.Err)
+			fields := runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}
+			if diagnostic := boundedQuiescenceDiagnostic(msg.Err); diagnostic != nil {
+				fields.Operation, fields.Cause = diagnostic.Operation, diagnostic.Cause
+			}
+			m.log(runlog.Event{Event: "pm2-quiescence", Stage: "quiescence", Status: "failed", Code: m.migrationRecoveryCode, Fields: fields})
 			if m.deps.Debug {
 				m.migrationDiagnostic = boundedQuiescenceDiagnostic(msg.Err)
 			}
 			return m, nil
 		}
 		m.migrationLease = msg.Lease
+		targets := make([]runlog.Target, 0, len(msg.Lease.PM2Targets()))
+		for _, target := range msg.Lease.PM2Targets() {
+			targets = append(targets, runlog.Target{PMID: target.PMID, Name: target.Name, Port: target.Port})
+		}
+		m.log(runlog.Event{Event: "pm2-quiescence", Stage: "quiescence", Status: "verified", Code: "pm2-stop-verified", Fields: runlog.Fields{Targets: targets, Attempted: len(targets), Verified: boolPtr(true)}})
+		dispositionCode := migration.DispositionStoppedCode
+		if m.containerDisposition == migration.DispositionRemove {
+			dispositionCode = migration.DispositionRemovedCode
+		}
+		m.log(runlog.Event{Event: "container-disposition", Stage: "quiescence", Status: "verified", Code: dispositionCode, Fields: runlog.Fields{Verified: boolPtr(true)}})
 		m.migrationPending = true
 		m.applyMigrationPortPolicy()
 		m.state = StatePreflight
@@ -523,6 +576,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.migrationPending = false
 		m.applyMigrationPortPolicy()
 		m.migrationRecoveryCode = boundedRecoveryCode(msg.Recovery, msg.Err)
+		recoveryFields := runlog.Fields{Attempted: msg.Recovery.Attempted, Recovered: msg.Recovery.Recovered, Verified: boolPtr(msg.Recovery.Verified), ErrorClass: fmt.Sprintf("%T", msg.Err)}
+		if msg.Recovery.Diagnostic != nil {
+			recoveryFields.Operation, recoveryFields.Cause = msg.Recovery.Diagnostic.Operation, msg.Recovery.Diagnostic.Cause
+		}
+		m.log(runlog.Event{Event: "pm2-recovery", Stage: "recovery", Status: "completed", Code: m.migrationRecoveryCode, Fields: recoveryFields})
 		m.migrationDiagnostic = nil
 		if m.deps.Debug && msg.Recovery.Diagnostic != nil {
 			diagnostic := *msg.Recovery.Diagnostic
@@ -735,6 +793,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.restoreCancel = nil
 		m.restoreResult = msg.Result
+		m.log(runlog.Event{Event: "restore-result", Stage: restoreStageName(msg.Result.FailedStage), Status: restoreOutcomeName(msg.Result.Outcome), Code: msg.Result.Code, Fields: runlog.Fields{Mutated: boolPtr(msg.Result.Mutated), Rollback: rollbackName(msg.Result.Rollback), BackendHealthy: boolPtr(msg.Result.BackendHealthy), LegacyValidated: boolPtr(msg.Result.LegacyBackup.Validated), TargetValidated: boolPtr(msg.Result.TargetBackup.Validated), RestoreExitOK: boolPtr(msg.Result.Database.RestoreExitOK), ConnectionOK: boolPtr(msg.Result.Database.ConnectionOK), PostgreSQLReachable: boolPtr(msg.Result.Database.PostgreSQLReachable)}})
 		if msg.Result.Outcome == migration.RestoreSucceeded {
 			m.state = StateDeploy
 			return m, func() tea.Msg { return HealthTickMsg{} }
@@ -749,20 +808,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case InstallSuccessMsg:
+		m.log(runlog.Event{Event: "terminal", Stage: "install", Status: "success", Code: "install-succeeded"})
 		if m.hasLiveMigrationLease() {
 			m.state = StateMigrationSuccess
 			return m, m.completeMigrationSuccess(msg)
 		}
 		m.state = StateResult
-		m.result = NewResultModel(m.deps.Theme, &msg, nil)
+		m.result = NewResultModel(m.deps.Theme, &msg, nil, m.deps.LogPath)
 		return m, nil
 
 	case InstallFailureMsg:
+		failure := msg
+		m.originalFailure = &failure
+		code := "install-failed"
+		if msg.Stage != "" {
+			code = msg.Stage + "-failed"
+		}
+		m.log(runlog.Event{Event: "original-failure", Stage: msg.Stage, Status: "failed", Code: code, Fields: runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}})
 		if m.hasLiveMigrationLease() {
 			return m.beginMigrationRecovery()
 		}
 		m.state = StateResult
-		m.result = NewResultModel(m.deps.Theme, nil, &msg)
+		m.result = NewResultModel(m.deps.Theme, nil, &msg, m.deps.LogPath)
 		return m, nil
 	}
 
@@ -869,6 +936,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+func stateName(state State) string {
+	names := [...]string{"splash", "preflight", "bootstrap", "workspace-input", "optional-packages", "port-scan", "env-write", "asterisk-setup", "pull", "deploy", "verify", "result", "detecting", "context-menu", "updating", "blocked-operation", "action-result", "migration-environment", "migration-auth", "migration-auth-failed", "backup-preflight", "backup-confirm", "backup-running", "backup-result", "migration-blocked", "database-restore", "migration-result", "migration-quiescence", "migration-recovery", "migration-success", "migration-confirm", "migration-cancelled", "migration-disposition", "migration-remove-confirm"}
+	if int(state) < 0 || int(state) >= len(names) {
+		return "unknown"
+	}
+	return names[state]
+}
+
+func restoreStageName(stage migration.RestoreStage) string {
+	names := [...]string{"platform-gate", "wait", "credentials", "legacy-revalidation", "backend-stop", "postgres-check", "target-backup", "target-replacement", "restore-validation", "backend-start", "backend-health", "rollback"}
+	if int(stage) < 0 || int(stage) >= len(names) {
+		return "unknown"
+	}
+	return names[stage]
+}
+
+func restoreOutcomeName(outcome migration.RestoreOutcome) string {
+	names := [...]string{"succeeded", "failed-before-cutover", "cancelled-before-cutover", "partial-cutover", "unsupported"}
+	if int(outcome) < 0 || int(outcome) >= len(names) {
+		return "unknown"
+	}
+	return names[outcome]
+}
+
+func rollbackName(status migration.RollbackStatus) string {
+	names := [...]string{"not-required", "succeeded", "failed", "cancelled"}
+	if int(status) < 0 || int(status) >= len(names) {
+		return "unknown"
+	}
+	return names[status]
 }
 
 func (m Model) backupConfirmationView() string {

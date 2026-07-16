@@ -32,6 +32,7 @@ import (
 	"github.com/jcaltamar/alice-installer/internal/ports"
 	"github.com/jcaltamar/alice-installer/internal/preflight"
 	"github.com/jcaltamar/alice-installer/internal/restart"
+	"github.com/jcaltamar/alice-installer/internal/runlog"
 	"github.com/jcaltamar/alice-installer/internal/secrets"
 	"github.com/jcaltamar/alice-installer/internal/theme"
 	"github.com/jcaltamar/alice-installer/internal/tui"
@@ -491,6 +492,7 @@ func runWithStaleCheck(
 		return 0
 	}
 
+	productionRun := factory == nil
 	if factory == nil {
 		if mode == modeUpdate || mode == modeRestart || f.DryRun || f.Unattended {
 			factory = newOperationalDependencies
@@ -500,6 +502,30 @@ func runWithStaleCheck(
 	}
 
 	ctx := context.Background()
+	var log runlog.Logger = runlog.NewDisabled()
+	if productionRun {
+		opened, openErr := runlog.Open("", runlog.DefaultKeep)
+		if openErr != nil {
+			fmt.Fprintln(errOut, "warning: diagnostic log unavailable")
+		} else {
+			log = opened
+		}
+	}
+	defer func() {
+		if closeErr := log.Close(); closeErr != nil {
+			fmt.Fprintln(errOut, "warning: diagnostic log could not be flushed")
+		}
+	}()
+	debug, unattended, dryRun := os.Getenv("DEBUG") == "1", f.Unattended, f.DryRun
+	log.Log(runlog.Event{Event: "startup", Stage: "run", Status: "started", Fields: runlog.Fields{Version: version, Mode: string(mode), Debug: &debug, Unattended: &unattended, DryRun: &dryRun}})
+	printLog := func(w io.Writer) {
+		if log.Path() != "unavailable" {
+			fmt.Fprintln(w, "Log:", log.Path())
+		}
+	}
+	terminal := func(status, code string) {
+		log.Log(runlog.Event{Event: "terminal", Stage: "run", Status: status, Code: code})
+	}
 
 	if mode == modeUpdate {
 		tuiDeps := factory(ctx, f)
@@ -509,9 +535,13 @@ func runWithStaleCheck(
 			GPU:     tuiDeps.GPU,
 		}
 		if runErr := runUpdateFn(ctx, cfg, deps, out); runErr != nil {
+			terminal("failure", "update-failed")
 			fmt.Fprintln(errOut, "error:", runErr)
+			printLog(errOut)
 			return 1
 		}
+		terminal("success", "update-succeeded")
+		printLog(out)
 		return 0
 	}
 
@@ -523,9 +553,13 @@ func runWithStaleCheck(
 			GPU:     tuiDeps.GPU,
 		}
 		if runErr := runRestartFn(ctx, cfg, deps, out); runErr != nil {
+			terminal("failure", "restart-failed")
 			fmt.Fprintln(errOut, "error:", runErr)
+			printLog(errOut)
 			return 1
 		}
+		terminal("success", "restart-succeeded")
+		printLog(out)
 		return 0
 	}
 
@@ -537,10 +571,14 @@ func runWithStaleCheck(
 			fmt.Fprintf(out, "  [%s] %s: %s\n", item.Status, item.Title, item.Detail)
 		}
 		if report.HasBlockingFailure() {
+			terminal("failure", "preflight-blocked")
 			fmt.Fprintln(out, "Result: FAIL — blocking issues found.")
+			printLog(out)
 			return 1
 		}
 		fmt.Fprintln(out, "Result: OK — no blocking issues.")
+		terminal("success", "preflight-passed")
+		printLog(out)
 		return 0
 	}
 
@@ -576,13 +614,17 @@ func runWithStaleCheck(
 		}
 
 		if runErr := runHeadlessFn(ctx, cfg, hdeps, out); runErr != nil {
+			terminal("failure", "unattended-failed")
 			fmt.Fprintln(errOut, "error:", runErr)
+			printLog(errOut)
 			// EX_TEMPFAIL (75) for ErrReloginRequired
 			if isReloginRequired(runErr) {
 				return 75
 			}
 			return 1
 		}
+		terminal("success", "unattended-succeeded")
+		printLog(out)
 		return 0
 	}
 
@@ -593,11 +635,19 @@ func runWithStaleCheck(
 	}
 
 	deps := factory(ctx, f)
+	deps.RunLog = log
+	deps.LogPath = log.Path()
 	model := tui.NewModel(deps)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
+		terminal("failure", "tui-failed")
 		fmt.Fprintln(errOut, "fatal:", err)
+		printLog(errOut)
 		return 1
+	}
+	printLog(out)
+	if log.Warning() != "" {
+		fmt.Fprintln(errOut, "warning:", log.Warning())
 	}
 	return 0
 }
