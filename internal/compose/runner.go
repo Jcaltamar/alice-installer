@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jcaltamar/alice-installer/internal/platform"
@@ -58,10 +60,11 @@ func IsReady(s ServiceHealth) bool {
 
 // PullProgressMsg carries a single line of progress from `docker compose pull`.
 type PullProgressMsg struct {
-	Service string
-	Status  string // "Pulling" | "Downloading" | "Pulled" | "Error"
-	Percent int    // 0-100 where applicable
-	Raw     string
+	Service    string
+	Status     string
+	Percent    int
+	HasPercent bool
+	Raw        string
 }
 
 // UpProgressMsg carries a single line of progress from `docker compose up`.
@@ -151,14 +154,26 @@ func (c *CLICompose) Version(ctx context.Context) (Version, error) {
 // On failure, stderr is captured and appended to the error so the user can see
 // the actual cause (e.g. "manifest unknown", "pull access denied").
 func (c *CLICompose) Pull(ctx context.Context, files []string, envFile string, progress chan<- PullProgressMsg) error {
-	args := baseArgs(files, envFile, "pull")
+	args := append([]string{"compose", "--progress", "plain"}, ComposeArgs(files)...)
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+	args = append(args, "pull")
 	var stderrBuf []string
+	handleProgress := func(line string) PullProgressMsg {
+		msg, _ := parsePullProgress(line)
+		progress <- msg
+		return msg
+	}
 	err := c.streamer.Stream(ctx,
 		func(line string) {
-			progress <- PullProgressMsg{Raw: line, Status: parsePullStatus(line)}
+			handleProgress(line)
 		},
 		func(line string) {
-			stderrBuf = append(stderrBuf, line)
+			msg := handleProgress(line)
+			if msg.Service == "" || strings.HasPrefix(msg.Status, "Error") {
+				stderrBuf = append(stderrBuf, msg.Raw)
+			}
 		},
 		"docker", args...,
 	)
@@ -172,6 +187,129 @@ func (c *CLICompose) Pull(ctx context.Context, files []string, envFile string, p
 		return fmt.Errorf("%w\n--- docker compose pull stderr ---\n%s", err, strings.Join(tail, "\n"))
 	}
 	return err
+}
+
+type pullProgressJSON struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id"`
+	Status   string `json:"status"`
+	Text     string `json:"text"`
+	Details  string `json:"details"`
+	Current  int64  `json:"current"`
+	Total    int64  `json:"total"`
+}
+
+var plainByteProgress = regexp.MustCompile(`([0-9.]+)([kMGT]?B)\s*/\s*([0-9.]+)([kMGT]?B)`)
+
+func parsePullProgress(line string) (PullProgressMsg, bool) {
+	var event pullProgressJSON
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		if msg, ok := parsePlainPullProgress(line); ok {
+			return msg, false
+		}
+		return PullProgressMsg{Status: parsePullStatus(line), Raw: line}, false
+	}
+	if event.ID == "" && event.ParentID == "" && event.Status == "" && event.Text == "" && event.Details == "" {
+		return PullProgressMsg{Status: parsePullStatus(line), Raw: line}, false
+	}
+
+	resource := event.ParentID
+	if resource == "" {
+		resource = event.ID
+	}
+	service := pullResourceLabel(resource)
+	if event.ParentID == "" && looksLikeDigest(service) {
+		service = ""
+	}
+
+	status := event.Text
+	if status == "" {
+		status = event.Status
+	}
+	if strings.EqualFold(event.Status, "Error") {
+		details := event.Details
+		if details == "" && !strings.EqualFold(event.Text, "Error") {
+			details = event.Text
+		}
+		status = "Error"
+		if details != "" {
+			status += ": " + details
+		}
+	}
+
+	msg := PullProgressMsg{Service: service, Status: status}
+	if event.Total > 0 && event.Current >= 0 {
+		msg.Percent = min(int(float64(event.Current)*100/float64(event.Total)), 100)
+		msg.HasPercent = true
+	}
+	msg.Raw = formatPullProgress(msg)
+	return msg, true
+}
+
+func parsePlainPullProgress(line string) (PullProgressMsg, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return PullProgressMsg{}, false
+	}
+	rest := strings.Join(fields[1:], " ")
+	status := ""
+	for _, candidate := range []string{"Pulling fs layer", "Download complete", "Verifying Checksum", "Already exists", "Pull complete", "Downloading", "Extracting", "Preparing", "Waiting", "Pulling", "Pulled", "Error"} {
+		if rest == candidate || strings.HasPrefix(rest, candidate+" ") {
+			status = candidate
+			break
+		}
+	}
+	if status == "" {
+		return PullProgressMsg{}, false
+	}
+	service := fields[0]
+	if looksLikeDigest(service) {
+		service = "layer " + strings.TrimPrefix(service, "sha256:")[:12]
+	}
+	msg := PullProgressMsg{Service: service, Status: status}
+	if values := plainByteProgress.FindStringSubmatch(rest); values != nil {
+		current, _ := strconv.ParseFloat(values[1], 64)
+		total, _ := strconv.ParseFloat(values[3], 64)
+		scale := map[string]float64{"B": 1, "kB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}
+		current, total = current*scale[values[2]], total*scale[values[4]]
+		if total > 0 {
+			msg.Percent, msg.HasPercent = min(int(current*100/total), 100), true
+		}
+	}
+	msg.Raw = formatPullProgress(msg)
+	return msg, true
+}
+
+func pullResourceLabel(resource string) string {
+	label := strings.TrimPrefix(resource, "Image ")
+	if digest := strings.Index(label, "@sha256:"); digest >= 0 {
+		label = label[:digest]
+	}
+	return label
+}
+
+func looksLikeDigest(value string) bool {
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) < 12 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func formatPullProgress(msg PullProgressMsg) string {
+	status := msg.Status
+	if msg.HasPercent {
+		status = fmt.Sprintf("%s %d%%", status, msg.Percent)
+	}
+	if msg.Service == "" {
+		return status
+	}
+	return strings.TrimSpace(msg.Service + " " + status)
 }
 
 // Up streams `docker compose up --detach` output; sends one UpProgressMsg per line.

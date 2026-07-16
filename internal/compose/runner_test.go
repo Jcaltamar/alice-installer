@@ -16,7 +16,12 @@ type stderrStreamingRunner struct {
 	err   error
 }
 
-func (r stderrStreamingRunner) Stream(_ context.Context, _, onStderr func(string), _ string, _ ...string) error {
+func (r stderrStreamingRunner) Stream(
+	_ context.Context,
+	_, onStderr func(string),
+	_ string,
+	_ ...string,
+) error {
 	for _, line := range r.lines {
 		onStderr(line)
 	}
@@ -464,6 +469,36 @@ func TestFakeComposeRunner_PullSendsProgressAndReturnsErr(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("Pull() sent %d messages, want 2", len(got))
+	}
+}
+
+func TestCLIComposePullPublishesStderrProgressAndPreservesFailure(t *testing.T) {
+	runErr := errors.New("exit status 1")
+	streamer := stderrStreamingRunner{
+		lines: []string{
+			"7a2c55901189 Downloading 25MB / 100MB",
+			"pull access denied for registry.example/alice/backend",
+		},
+		err: runErr,
+	}
+	runner := compose.NewCLICompose(nil, streamer)
+	progress := make(chan compose.PullProgressMsg, 2)
+
+	err := runner.Pull(context.Background(), []string{"compose.yml"}, ".env", progress)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("Pull() error = %v, want wrapped %v", err, runErr)
+	}
+	if !strings.Contains(err.Error(), "pull access denied") {
+		t.Fatalf("Pull() error = %q, want actionable stderr", err)
+	}
+
+	select {
+	case got := <-progress:
+		if got.Service != "layer 7a2c55901189" || got.Status != "Downloading" || got.Percent != 25 || !got.HasPercent {
+			t.Fatalf("Pull() progress = %s, want parsed stderr progress", fmt.Sprintf("%+v", got))
+		}
+	default:
+		t.Fatal("Pull() published no stderr progress")
 	}
 }
 

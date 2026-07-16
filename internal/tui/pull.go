@@ -104,7 +104,11 @@ func (p PullModel) Update(msg tea.Msg) (PullModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case compose.PullProgressMsg:
 		if m.Service != "" {
-			p.services[m.Service] = m.Status
+			status := m.Status
+			if m.HasPercent {
+				status = fmt.Sprintf("%s %d%%", status, m.Percent)
+			}
+			p.services[m.Service] = status
 		}
 		// Reschedule another drain read so the next progress msg arrives.
 		return p, p.drainNext()

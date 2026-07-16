@@ -28,8 +28,8 @@ func TestCLICompose_Pull_InvokesDockerComposeNotDocker(t *testing.T) {
 			firstOr(streamer.LastArgs, "<empty>"), "compose", streamer.LastArgs)
 	}
 	joined := strings.Join(append([]string{streamer.LastName}, streamer.LastArgs...), " ")
-	if !strings.Contains(joined, "docker compose -f docker-compose.yml") {
-		t.Errorf("invocation = %q, want prefix 'docker compose -f docker-compose.yml'", joined)
+	if joined != "docker compose --progress plain -f docker-compose.yml --env-file .env pull" {
+		t.Errorf("invocation = %q, want exact v2.21-compatible plain progress argv", joined)
 	}
 	if !strings.Contains(joined, "pull") {
 		t.Errorf("invocation = %q, missing 'pull' subcommand", joined)
