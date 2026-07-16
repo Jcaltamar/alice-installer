@@ -177,13 +177,24 @@ func (c *CLICompose) Pull(ctx context.Context, files []string, envFile string, p
 // Up streams `docker compose up --detach` output; sends one UpProgressMsg per line.
 func (c *CLICompose) Up(ctx context.Context, files []string, envFile string, progress chan<- UpProgressMsg) error {
 	args := baseArgs(files, envFile, "up", "--detach")
-	return c.streamer.Stream(ctx,
+	var stderrBuf []string
+	err := c.streamer.Stream(ctx,
 		func(line string) {
 			progress <- UpProgressMsg{Raw: line, Status: line}
 		},
-		func(_ string) {},
+		func(line string) {
+			stderrBuf = append(stderrBuf, line)
+		},
 		"docker", args...,
 	)
+	if err != nil && len(stderrBuf) > 0 {
+		tail := stderrBuf
+		if len(tail) > stderrLines {
+			tail = tail[len(tail)-stderrLines:]
+		}
+		return fmt.Errorf("%w\n--- docker compose up stderr ---\n%s", err, strings.Join(tail, "\n"))
+	}
+	return err
 }
 
 // Restart runs `docker compose restart` (one-shot).

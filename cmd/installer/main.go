@@ -345,7 +345,10 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 			executor := migration.OSBinaryExecutor{}
 			migrationDocker := migration.SudoDockerExecutor{Executor: executor}
 			pm2Runner := installation.RootPM2Boundary{Runner: &platform.OSCommandRunner{}}
-			deps.MigrationAuthenticator = tui.SudoMigrationAuthenticator{}
+			migrationAuthenticator := tui.SudoMigrationAuthenticator{}
+			deps.MigrationAuthenticator = migrationAuthenticator
+			deps.MigrationAuthValidator = tui.SudoMigrationAuthorizationValidator{}
+			deps.MigrationAuthRefresher = migrationAuthenticator
 			deps.LegacyBackupAction = migration.BackupAction{
 				Resolver:  migration.Resolver{},
 				Inspector: migration.InspectorDiscovery{Inspector: migration.DockerCLIInspector{Runner: migration.NewSudoDockerRunner(executor)}},

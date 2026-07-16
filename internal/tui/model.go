@@ -65,6 +65,8 @@ const (
 	StateMigrationRemoveConfirm State = iota
 	StateDockerAuth             State = iota
 	StateDockerAuthFailed       State = iota
+	StateMigrationAuthCheck     State = iota
+	StateMigrationAuthRefresh   State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -101,6 +103,8 @@ type Dependencies struct {
 	LegacyRestoreAction    migration.LegacyRestoreAction
 	MigrationHandoff       MigrationHandoff
 	MigrationAuthenticator MigrationAuthenticator
+	MigrationAuthValidator MigrationAuthorizationValidator
+	MigrationAuthRefresher MigrationAuthorizationRefresher
 	DockerAuthenticator    MigrationAuthenticator
 
 	PreflightCoordinator preflight.Coordinator
@@ -474,6 +478,47 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 			plan, err := m.deps.LegacyBackupAction.Preflight(context.Background(), request)
 			return BackupPreflightCompletedMsg{Plan: plan, Err: err}
 		}
+
+	case PullCompleteMsg:
+		if !m.hasLiveMigrationLease() {
+			break
+		}
+		m.pull.done = true
+		m.state = StateMigrationAuthCheck
+		m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "requested"})
+		if m.deps.MigrationAuthValidator == nil {
+			return m, func() tea.Msg {
+				return MigrationAuthorizationCheckedMsg{Err: fmt.Errorf("migration authorization validator is unavailable")}
+			}
+		}
+		return m, m.deps.MigrationAuthValidator.Validate()
+
+	case MigrationAuthorizationCheckedMsg:
+		if m.state != StateMigrationAuthCheck {
+			return m, nil
+		}
+		if msg.Err == nil {
+			m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "not-required"})
+			return m.Update(DeployStartedMsg{})
+		}
+		m.state = StateMigrationAuthRefresh
+		if m.deps.MigrationAuthRefresher == nil {
+			return m.Update(MigrationAuthorizationRefreshCompletedMsg{Err: fmt.Errorf("migration authorization refresher is unavailable")})
+		}
+		return m, m.deps.MigrationAuthRefresher.Refresh()
+
+	case MigrationAuthorizationRefreshCompletedMsg:
+		if m.state != StateMigrationAuthRefresh {
+			return m, nil
+		}
+		if msg.Err == nil {
+			m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "succeeded"})
+			return m.Update(DeployStartedMsg{})
+		}
+		m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "failed", Code: "migration-auth-refresh-failed", Fields: runlog.Fields{ErrorClass: safeErrorClass(msg.Err)}})
+		failure := InstallFailureMsg{Err: msg.Err, Stage: "migration-authorization-refresh"}
+		m.originalFailure = &failure
+		return m.beginMigrationRecovery()
 
 	case BackupPreflightCompletedMsg:
 		if m.state != StateBackupPreflight {
@@ -983,7 +1028,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 }
 
 func stateName(state State) string {
-	names := [...]string{"splash", "preflight", "bootstrap", "workspace-input", "optional-packages", "port-scan", "env-write", "asterisk-setup", "pull", "deploy", "verify", "result", "detecting", "context-menu", "updating", "blocked-operation", "action-result", "migration-environment", "migration-auth", "migration-auth-failed", "backup-preflight", "backup-confirm", "backup-running", "backup-result", "migration-blocked", "database-restore", "migration-result", "migration-quiescence", "migration-recovery", "migration-success", "migration-confirm", "migration-cancelled", "migration-disposition", "migration-remove-confirm"}
+	names := [...]string{"splash", "preflight", "bootstrap", "workspace-input", "optional-packages", "port-scan", "env-write", "asterisk-setup", "pull", "deploy", "verify", "result", "detecting", "context-menu", "updating", "blocked-operation", "action-result", "migration-environment", "migration-auth", "migration-auth-failed", "backup-preflight", "backup-confirm", "backup-running", "backup-result", "migration-blocked", "database-restore", "migration-result", "migration-quiescence", "migration-recovery", "migration-success", "migration-confirm", "migration-cancelled", "migration-disposition", "migration-remove-confirm", "docker-auth", "docker-auth-failed", "migration-authorization-check", "migration-authorization-refresh"}
 	if int(state) < 0 || int(state) >= len(names) {
 		return "unknown"
 	}
@@ -1063,6 +1108,10 @@ func (m Model) View() string {
 		return m.deps.Theme.TextMuted.Render("Requesting migration authorization in the terminal…")
 	case StateMigrationAuthFailed:
 		return m.deps.Theme.Primary.Bold(true).Render("Migration authorization failed") + "\n\nMigration remains blocked. No backup preflight or filesystem mutation was started.\n"
+	case StateMigrationAuthCheck:
+		return m.deps.Theme.TextMuted.Render("Checking migration authorization before deploy…")
+	case StateMigrationAuthRefresh:
+		return m.deps.Theme.TextMuted.Render("Migration authorization expired. Requesting authorization in the terminal before deploy…")
 	case StateDockerAuth:
 		return m.deps.Theme.TextMuted.Render("Requesting Docker authorization in the terminal…")
 	case StateDockerAuthFailed:
