@@ -16,7 +16,7 @@
 
 - Linux (amd64 or arm64)
 - Docker Engine ≥ 24.0 with the Compose v2 plugin (`docker compose version`)
-- A user in the `docker` group (`sudo usermod -aG docker $USER`)
+- Non-interactive sudo authorization for Docker operations (`sudo -n docker info`)
 - Free TCP ports: 5432, 6379, 9090, 4550, 8080, 3000, 8554, 8888, 8889, 8890, 1935, 19530, 9000, 9001
 
 ### Run the installer
@@ -255,18 +255,8 @@ Re-run the installer to pick up the GPU overlay.
 
 **Fix**: The installer requires a real TTY. Do not pipe input to it. If running over SSH, use `ssh -t user@host` to allocate a pseudo-TTY. For non-interactive use, use `--dry-run`.
 
-### Stale docker-group recovery
+### Docker sudo authorization
 
-**Symptom**: You ran `sudo usermod -aG docker $USER` and re-ran the installer in the same terminal session, but it still reports `Docker daemon unreachable (permission denied on /var/run/docker.sock)`.
+**Symptom**: The installer reports that non-interactive sudo authorization is required for Docker operations.
 
-**What happens automatically**: The installer detects at startup that your user is in `/etc/group:docker` but the docker GID is absent from the current process's supplementary groups (classic post-`usermod` stale-session state). It automatically re-execs itself via `sg docker -c <argv>` so the replacement process inherits the docker group — no logout required.
-
-**Requirement**: The `sg` binary must be present (provided by the `login` package on Ubuntu/Debian; typically pre-installed on any standard distribution).
-
-**Fallback — if `sg` is not available**: The installer exits with code `75` (`EX_TEMPFAIL`) and prints a copy-paste-ready command:
-
-```
-newgrp docker && alice-installer <original flags>
-```
-
-Run that command to get a subshell with the updated group and re-run the installer in one step.
+**Fix**: Authorize sudo in the interactive session when prompted. Unattended runs require a preauthorized sudo credential; verify it with `sudo -n docker info`. The installer remains a non-root process and elevates only Docker and Docker Compose commands.

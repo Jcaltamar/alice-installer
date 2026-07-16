@@ -137,7 +137,7 @@ FULL_DEPLOY=1 make e2e     # full mode — pulls images (~3 GB) and brings servi
 The basic mode validates:
 
 - Docker is installed and the `docker compose` plugin works
-- `testuser` is added to the `docker` group
+- Docker and Compose operations work for non-root `testuser` through preauthorized `sudo -n`, without docker-group membership
 - `/opt/alice-media` and `/opt/alice-config` are created and writable
 - `.env` and both compose files are written to the workspace directory
 
