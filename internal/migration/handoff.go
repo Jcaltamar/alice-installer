@@ -23,6 +23,23 @@ type PreInstallMigrationLease struct {
 	consumed    bool
 }
 
+type PM2Target struct {
+	PMID int64
+	Name string
+	Port uint16
+}
+
+func (l *PreInstallMigrationLease) PM2Targets() []PM2Target {
+	if l == nil {
+		return nil
+	}
+	targets := make([]PM2Target, 0, len(l.quiescence.Processes))
+	for _, process := range l.quiescence.Processes {
+		targets = append(targets, PM2Target{PMID: process.PMID, Name: process.Name, Port: process.Port})
+	}
+	return targets
+}
+
 func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup BackupRef, containerID string, disposition ContainerDisposition) (*PreInstallMigrationLease, error) {
 	if c == nil || c.Legacy == nil || c.PM2 == nil || c.Container == nil || !fullContainerID.MatchString(containerID) || disposition > DispositionRemove || ctx.Err() != nil {
 		return nil, errors.New("pre-install migration is unavailable")

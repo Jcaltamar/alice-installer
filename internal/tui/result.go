@@ -21,6 +21,7 @@ type ResultModel struct {
 	success       bool
 	successDetail *InstallSuccessMsg
 	failure       *InstallFailureMsg
+	logPath       string
 }
 
 // NewResultModel constructs a ResultModel.
@@ -29,12 +30,18 @@ func NewResultModel(
 	th theme.Theme,
 	successDetail *InstallSuccessMsg,
 	failureDetail *InstallFailureMsg,
+	logPath ...string,
 ) ResultModel {
+	path := ""
+	if len(logPath) > 0 {
+		path = logPath[0]
+	}
 	return ResultModel{
 		theme:         th,
 		success:       successDetail != nil,
 		successDetail: successDetail,
 		failure:       failureDetail,
+		logPath:       path,
 	}
 }
 
@@ -107,6 +114,10 @@ func (r ResultModel) viewSuccess() string {
 	}
 
 	sb.WriteString("\n")
+	if r.logPath != "" {
+		sb.WriteString(r.theme.TextMuted.Render("  Log: " + r.logPath))
+		sb.WriteString("\n")
+	}
 	sb.WriteString(r.theme.TextMuted.Render("  Press Enter or q to exit."))
 	sb.WriteString("\n")
 	return sb.String()
@@ -137,6 +148,10 @@ func (r ResultModel) viewFailure() string {
 	sb.WriteString("\n")
 	sb.WriteString(r.theme.TextMuted.Render("    3. Re-run installer to try again."))
 	sb.WriteString("\n\n")
+	if r.logPath != "" {
+		sb.WriteString(r.theme.TextMuted.Render("  Log: " + r.logPath))
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(r.theme.TextMuted.Render("  Press Enter or q to exit."))
 	sb.WriteString("\n")
 	return sb.String()

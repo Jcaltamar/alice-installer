@@ -11,6 +11,7 @@ import (
 
 	"github.com/jcaltamar/alice-installer/internal/installation"
 	"github.com/jcaltamar/alice-installer/internal/migration"
+	"github.com/jcaltamar/alice-installer/internal/runlog"
 )
 
 // MigrationHandoff owns the PM2 lease outside the TUI policy layer.
@@ -70,6 +71,7 @@ func (m Model) beginMigrationRecovery() (Model, tea.Cmd) {
 		m.quiescenceCancel = nil
 	}
 	m.state = StateMigrationRecovery
+	m.log(runlog.Event{Event: "recovery-start", Stage: "recovery", Status: "started"})
 	handoff, lease := m.deps.MigrationHandoff, m.migrationLease
 	return m, func() (msg tea.Msg) {
 		defer func() {
@@ -149,7 +151,17 @@ func (m Model) migrationTerminalView() string {
 	var message strings.Builder
 	message.WriteString("Migration did not complete.\n")
 	message.WriteString("The installer did not report installation success.\n")
+	if m.originalFailure != nil {
+		code := "install-failed"
+		if m.originalFailure.Stage != "" {
+			code = m.originalFailure.Stage + "-failed"
+		}
+		message.WriteString("Original failure: stage=" + m.originalFailure.Stage + " code=" + code + "\n")
+	}
 	message.WriteString("Recovery status: " + m.migrationRecoveryCode + "\n")
+	if m.deps.LogPath != "" {
+		message.WriteString("Log: " + m.deps.LogPath + "\n")
+	}
 	if diagnostic := m.migrationDiagnostic; diagnostic != nil {
 		stage, operation, command, cause := diagnostic.Stage, diagnostic.Operation, diagnostic.Command, diagnostic.Cause
 		if diagnostic.StopProofTimedOut || diagnostic.StopProofCancelled {
