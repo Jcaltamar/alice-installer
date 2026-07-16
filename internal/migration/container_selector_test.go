@@ -12,7 +12,7 @@ import (
 func TestDiscoverContainerFailsClosed(t *testing.T) {
 	config := ResolvedConfig{Host: "postgres", Port: 5432, Database: "alice", Username: "guardian"}
 	fullID := strings.Repeat("a", 64)
-	base := ContainerDetails{ID: fullID, Image: "bitnami/postgresql:11-debian-10", State: ContainerRunning, Health: HealthNone, NetworkMode: "bridge", DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, Endpoints: []ContainerEndpoint{{Host: "postgres", Port: 5432, ContainerLocal: true}}, MountKinds: []string{"bitnami-postgresql-data"}, Labels: SafeContainerLabels{ComposeService: "postgresql"}}
+	base := ContainerDetails{ID: fullID, Name: legacyPostgreSQLMasterName, Image: "bitnami/postgresql:11-debian-10", State: ContainerRunning, Health: HealthNone, NetworkMode: "bridge", DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, Endpoints: []ContainerEndpoint{{Host: "postgres", Port: 5432, ContainerLocal: true}}, MountKinds: []string{"bitnami-postgresql-data"}, Labels: SafeContainerLabels{ComposeProject: "postgres", ComposeService: "postgresql-master"}}
 
 	for _, tt := range []struct {
 		name       string
@@ -90,7 +90,7 @@ func TestCanonicalPostgreSQL11ImageAcceptsOnlyTrustedDockerHubSpellings(t *testi
 func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *testing.T) {
 	config := ResolvedConfig{Host: "postgres", Port: 5432, Database: "alice", Username: "guardian"}
 	validID, unrelatedID := strings.Repeat("a", 64), strings.Repeat("b", 64)
-	valid := ContainerDetails{ID: validID, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthNone, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, Endpoints: []ContainerEndpoint{{Host: "postgres", Port: 5432, ContainerLocal: true}}, MountKinds: []string{"bitnami-postgresql-data"}}
+	valid := ContainerDetails{ID: validID, Name: legacyPostgreSQLMasterName, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthNone, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, Endpoints: []ContainerEndpoint{{Host: "postgres", Port: 5432, ContainerLocal: true}}, MountKinds: []string{"bitnami-postgresql-data"}}
 
 	for _, tt := range []struct {
 		name       string
@@ -110,10 +110,18 @@ func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *test
 		{"allowed label independently corroborates", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails {
 			d := valid
 			d.MountKinds = nil
-			d.Labels = SafeContainerLabels{ComposeService: "postgresql"}
+			d.Labels = SafeContainerLabels{ComposeProject: "postgres", ComposeService: "postgresql-master"}
 			return d
 		}()}, validID, nil},
 		{"unknown declared health is rejected", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails { d := valid; d.Health = HealthUnknown; return d }()}, "", ErrContainerPrecondition},
+		{"wrong exact name is rejected", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails { d := valid; d.Name = "postgres_postgresql-slave_1"; return d }()}, "", ErrContainerPrecondition},
+		{"wrong inspect image is rejected", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails { d := valid; d.Image = "bitnami/postgresql:12-debian-10"; return d }()}, "", ErrContainerPrecondition},
+		{"wrong compose provenance is rejected", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: func() ContainerDetails {
+			d := valid
+			d.Labels = SafeContainerLabels{ComposeProject: "spoof", ComposeService: "postgresql-master"}
+			return d
+		}()}, "", ErrContainerIdentity},
+		{"label-less legacy volume is accepted", []ContainerSummary{{ID: validID, Image: string(PostgreSQL11Image)}}, map[string]ContainerDetails{validID: valid}, validID, nil},
 		{"trusted explicit Docker Hub image is canonicalized", []ContainerSummary{{ID: validID, Image: "docker.io/bitnami/postgresql:11-debian-10"}}, map[string]ContainerDetails{validID: valid}, validID, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -133,9 +141,28 @@ func TestDiscoverContainerCollectsOnlySufficientlyCorroboratedCandidates(t *test
 	}
 }
 
+func TestDiscoverContainerReportsStoppedProductionMasterWithoutUsingUnrelatedCandidates(t *testing.T) {
+	config := ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice_guardian", Username: "postgres"}
+	tecnoparkingID, slaveID, masterID := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	image := string(PostgreSQL11Image)
+	inspector := &fakeInspector{
+		candidates: []ContainerSummary{{ID: tecnoparkingID, Image: image}, {ID: slaveID, Image: image}, {ID: masterID, Image: image}},
+		details: map[string]ContainerDetails{
+			tecnoparkingID: {ID: tecnoparkingID, Name: "tecnoparking_postgresql_1", Image: image, State: ContainerRunning, Health: HealthHealthy, DatabaseNames: []string{"tecnoparking"}, Usernames: []string{"postgres"}, PublishedPorts: []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}}, MountKinds: []string{"bitnami-postgresql-data"}},
+			slaveID:        {ID: slaveID, Name: "postgres_postgresql-slave_1", Image: image, State: ContainerRunning, Health: HealthHealthy, DatabaseNames: []string{"alice_guardian"}, Usernames: []string{"postgres"}, Endpoints: []ContainerEndpoint{{Host: "postgresql-slave", Port: 5432, ContainerLocal: true}}, MountKinds: []string{"bitnami-postgresql-data"}, Labels: SafeContainerLabels{ComposeProject: "postgres", ComposeService: "postgresql-slave"}},
+			masterID:       {ID: masterID, Name: legacyPostgreSQLMasterName, Image: image, State: ContainerStopped, Health: HealthNone, DatabaseNames: []string{"alice_guardian"}, Usernames: []string{"postgres"}, PublishedPorts: []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}}, MountKinds: []string{"bitnami-postgresql-data"}, Labels: SafeContainerLabels{ComposeProject: "postgres", ComposeService: "postgresql-master"}},
+		},
+	}
+
+	_, err := DiscoverContainer(context.Background(), inspector, config)
+	if err == nil || err.Error() != "legacy database container precondition failed: legacy database container is stopped" {
+		t.Fatalf("DiscoverContainer() error = %v, want stopped legacy master", err)
+	}
+}
+
 func TestDiscoverContainerSupportsStrictEndpointModes(t *testing.T) {
 	id := strings.Repeat("a", 64)
-	base := ContainerDetails{ID: id, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthHealthy, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, MountKinds: []string{"bitnami-postgresql-data"}}
+	base := ContainerDetails{ID: id, Name: legacyPostgreSQLMasterName, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthHealthy, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, MountKinds: []string{"bitnami-postgresql-data"}}
 	binding := func(hostIP string, hostPort, containerPort int) []PublishedPortBinding {
 		return []PublishedPortBinding{{HostIP: hostIP, HostPort: hostPort, ContainerPort: containerPort}}
 	}
@@ -175,7 +202,7 @@ func TestDiscoverContainerSupportsStrictEndpointModes(t *testing.T) {
 			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
 			d.State = ContainerStopped
 			return d
-		}, ErrContainerUnsafeState},
+		}, ErrContainerStopped},
 		{"unhealthy", ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}, func(d ContainerDetails) ContainerDetails {
 			d.PublishedPorts = binding("127.0.0.1", 5435, 5432)
 			d.Health = HealthUnhealthy
@@ -205,7 +232,7 @@ func TestDiscoverContainerRejectsAmbiguousPublishedEndpoint(t *testing.T) {
 	id1, id2 := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	config := ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice", Username: "guardian"}
 	details := func(id string) ContainerDetails {
-		return ContainerDetails{ID: id, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthNone, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, PublishedPorts: []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}}, Labels: SafeContainerLabels{ComposeService: "postgresql"}}
+		return ContainerDetails{ID: id, Name: legacyPostgreSQLMasterName, Image: string(PostgreSQL11Image), State: ContainerRunning, Health: HealthNone, DatabaseNames: []string{"alice"}, Usernames: []string{"guardian"}, PublishedPorts: []PublishedPortBinding{{HostIP: "0.0.0.0", HostPort: 5435, ContainerPort: 5432}}, Labels: SafeContainerLabels{ComposeProject: "postgres", ComposeService: "postgresql-master"}}
 	}
 	_, err := DiscoverContainer(context.Background(), &fakeInspector{candidates: []ContainerSummary{{ID: id1, Image: string(PostgreSQL11Image)}, {ID: id2, Image: string(PostgreSQL11Image)}}, details: map[string]ContainerDetails{id1: details(id1), id2: details(id2)}}, config)
 	if !errors.Is(err, ErrAmbiguousContainer) {
@@ -215,7 +242,7 @@ func TestDiscoverContainerRejectsAmbiguousPublishedEndpoint(t *testing.T) {
 
 func TestDockerCLIInspectorRedactsSensitiveMountData(t *testing.T) {
 	id := strings.Repeat("a", 64)
-	inspect := `[{"Id":"` + id + `","Config":{"Image":"bitnami/postgresql:11-debian-10","Labels":{}},"State":{"Running":true},"Mounts":[{"Name":"private-volume","Destination":"/private/synthetic-secret-must-not-escape"},{"Name":"bitnami-postgresql-data","Destination":"/bitnami/postgresql"}]}]`
+	inspect := `[{"Id":"` + id + `","Name":"/postgres_postgresql-master_1","Config":{"Image":"bitnami/postgresql:11-debian-10","Labels":{}},"State":{"Running":true},"Mounts":[{"Name":"private-volume","Destination":"/private/synthetic-secret-must-not-escape"},{"Name":"bitnami-postgresql-data","Destination":"/bitnami/postgresql"}]}]`
 	details, ok := safeDetails(dockerInspectFromJSON(t, inspect))
 	if !ok || len(details.MountKinds) != 1 || details.MountKinds[0] != "bitnami-postgresql-data" {
 		t.Fatalf("safeDetails() = %#v, %v", details, ok)
@@ -278,7 +305,7 @@ func TestDockerCLIInspectorRejectsMalformedOrUnavailableDockerData(t *testing.T)
 
 func TestDockerCLIInspectorParsesOnlyAllowlistedMetadata(t *testing.T) {
 	id := strings.Repeat("a", 64)
-	inspect := `[{"Id":"` + id + `","Config":{"Image":"bitnami/postgresql:11-debian-10","Env":["POSTGRESQL_DATABASE=alice","POSTGRESQL_USERNAME=guardian","POSTGRESQL_PASSWORD=synthetic-secret-must-not-escape"],"Labels":{"com.docker.compose.service":"postgresql","unrelated":"private"}},"State":{"Running":true,"Health":{"Status":"healthy"}},"HostConfig":{"NetworkMode":"bridge"},"Mounts":[{"Name":"bitnami-postgresql-data","Destination":"/bitnami/postgresql"}],"NetworkSettings":{"Networks":{"bridge":{"Aliases":["postgres"]}},"Ports":{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"5432"}]}}}]`
+	inspect := `[{"Id":"` + id + `","Name":"/postgres_postgresql-master_1","Config":{"Image":"bitnami/postgresql:11-debian-10","Env":["POSTGRESQL_DATABASE=alice","POSTGRESQL_USERNAME=guardian","POSTGRESQL_PASSWORD=synthetic-secret-must-not-escape"],"Labels":{"com.docker.compose.project":"postgres","com.docker.compose.service":"postgresql-master","unrelated":"private"}},"State":{"Running":true,"Health":{"Status":"healthy"}},"HostConfig":{"NetworkMode":"bridge"},"Mounts":[{"Name":"bitnami-postgresql-data","Destination":"/bitnami/postgresql"}],"NetworkSettings":{"Networks":{"bridge":{"Aliases":["postgres"]}},"Ports":{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"5432"}]}}}]`
 	runner := &fakeDockerRunner{outputs: [][]byte{[]byte(id + "\tbitnami/postgresql:11-debian-10\n"), []byte(inspect)}}
 	inspector := DockerCLIInspector{Runner: runner}
 	candidates, err := inspector.Candidates(context.Background(), PostgreSQL11Image)
@@ -286,7 +313,7 @@ func TestDockerCLIInspectorParsesOnlyAllowlistedMetadata(t *testing.T) {
 		t.Fatalf("Candidates() = %#v, %v", candidates, err)
 	}
 	details, err := inspector.Inspect(context.Background(), id)
-	if err != nil || details.Health != HealthHealthy || len(details.DatabaseNames) != 1 || details.DatabaseNames[0] != "alice" || details.Labels.ComposeService != "postgresql" || len(details.PublishedPorts) != 1 || details.PublishedPorts[0] != (PublishedPortBinding{HostIP: "127.0.0.1", HostPort: 5432, ContainerPort: 5432}) {
+	if err != nil || details.Name != legacyPostgreSQLMasterName || details.Health != HealthHealthy || len(details.DatabaseNames) != 1 || details.DatabaseNames[0] != "alice" || details.Labels.ComposeProject != "postgres" || details.Labels.ComposeService != "postgresql-master" || len(details.PublishedPorts) != 1 || details.PublishedPorts[0] != (PublishedPortBinding{HostIP: "127.0.0.1", HostPort: 5432, ContainerPort: 5432}) {
 		t.Fatalf("Inspect() = %#v, %v", details, err)
 	}
 	assertNoDockerLeak(t, details, candidates, err)
@@ -302,7 +329,7 @@ func TestDockerCLIInspectorSelectsRealMasterPortCaseAmongUnrelatedPostgreSQLCont
 		masterID + "\tdocker.io/bitnami/postgresql:11-debian-10",
 		otherID + "\tpostgres:11",
 	}, "\n") + "\n"
-	inspect := `[{"Id":"` + masterID + `","Config":{"Image":"docker.io/bitnami/postgresql:11-debian-10","Env":["POSTGRESQL_DATABASE=alice_guardian","POSTGRESQL_USERNAME=postgres"],"Labels":{"com.docker.compose.service":"postgresql-master"}},"State":{"Running":true,"Health":{"Status":"healthy"}},"Mounts":[{"Name":"postgresql-master-data","Destination":"/bitnami/postgresql"}],"NetworkSettings":{"Ports":{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5435"},{"HostIp":"::","HostPort":"5435"}]}}}]`
+	inspect := `[{"Id":"` + masterID + `","Name":"/postgres_postgresql-master_1","Config":{"Image":"docker.io/bitnami/postgresql:11-debian-10","Env":["POSTGRESQL_DATABASE=alice_guardian","POSTGRESQL_USERNAME=postgres"],"Labels":{"com.docker.compose.project":"postgres","com.docker.compose.service":"postgresql-master"}},"State":{"Running":true,"Health":{"Status":"healthy"}},"Mounts":[{"Name":"postgresql-master-data","Destination":"/bitnami/postgresql"}],"NetworkSettings":{"Ports":{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5435"},{"HostIp":"::","HostPort":"5435"}]}}}]`
 	inspector := DockerCLIInspector{Runner: &fakeDockerRunner{outputs: [][]byte{[]byte(list), []byte(inspect)}}}
 
 	identity, err := DiscoverContainer(context.Background(), inspector, ResolvedConfig{Host: "127.0.0.1", Port: 5435, Database: "alice_guardian", Username: "postgres"})

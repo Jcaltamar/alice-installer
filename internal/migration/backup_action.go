@@ -109,10 +109,11 @@ const (
 	BackupFailureArchiveValidation
 	BackupFailurePublication
 	BackupFailureSudoDockerPermission
+	BackupFailureLegacyContainerStopped
 )
 
 func (c BackupFailureCode) String() string {
-	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-legacy-container-image-untrusted", "backup-legacy-container-identity-mismatch", "backup-legacy-container-endpoint-mismatch", "backup-legacy-container-unsafe", "backup-legacy-container-ambiguous", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication", "backup-sudo-docker-permission"}
+	codes := [...]string{"", "backup-precondition", "backup-engine-unavailable", "backup-resolved-config-invalid", "backup-legacy-container-invalid", "backup-legacy-container-image-untrusted", "backup-legacy-container-identity-mismatch", "backup-legacy-container-endpoint-mismatch", "backup-legacy-container-unsafe", "backup-legacy-container-ambiguous", "backup-cancelled", "backup-destination", "backup-credentials", "backup-helper-precondition", "backup-dump-timeout", "backup-dump", "backup-helper-cleanup", "backup-staged-sync", "backup-staged-close", "backup-staged-empty", "backup-archive-validation", "backup-publication", "backup-sudo-docker-permission", "backup-legacy-container-stopped"}
 	if int(c) >= len(codes) || c == BackupFailureNone {
 		return "backup-failed"
 	}
@@ -132,6 +133,7 @@ const (
 	BackupRemediationDocker
 	BackupRemediationStorage
 	BackupRemediationArchive
+	BackupRemediationRestartLegacyContainer
 )
 
 func (r BackupRemediation) String() string {
@@ -146,6 +148,7 @@ func (r BackupRemediation) String() string {
 		"Verify Docker and the legacy database are available, then retry.",
 		"Verify destination storage health and free space, then retry.",
 		"Verify the pinned PostgreSQL helper image and retry; do not continue migration.",
+		"Restart and verify the legacy PostgreSQL master, then retry the backup; the installer will not start it automatically.",
 	}
 	if int(r) >= len(hints) {
 		return hints[0]
@@ -249,6 +252,8 @@ func BackupPreflightFailureResult(err error) BackupResult {
 		code = BackupFailureLegacyContainerEndpointMismatch
 	case errors.Is(err, ErrContainerUnsafeState):
 		code = BackupFailureLegacyContainerUnsafe
+	case errors.Is(err, ErrContainerStopped):
+		code, remediation = BackupFailureLegacyContainerStopped, BackupRemediationRestartLegacyContainer
 	case errors.Is(err, ErrAmbiguousContainer):
 		code = BackupFailureLegacyContainerAmbiguous
 	case errors.Is(err, ErrLegacyContainerInvalid):
