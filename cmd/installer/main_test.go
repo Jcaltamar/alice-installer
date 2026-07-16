@@ -527,7 +527,7 @@ func runWithoutStaleDockerGroup(args []string, out, errOut io.Writer, factory de
 // TestRunStaleGroupReexecSuccess verifies that when the stale-group detector
 // returns Stale=true and the reexec helper succeeds (returns nil), run() returns
 // the execFn-signalled exit code 0 without proceeding to the factory/TUI.
-func TestRunStaleGroupReexecSuccess(t *testing.T) {
+func TestRunStaleGroupDoesNotReexec(t *testing.T) {
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 
@@ -536,21 +536,25 @@ func TestRunStaleGroupReexecSuccess(t *testing.T) {
 		return bootstrap.StaleGroupResult{Stale: true, DockerGID: 999}, nil
 	}
 	// reexecFn: simulate success (returns nil — process would be replaced for real)
+	reexecCalled := false
 	reexecFn := func(argv []string, env []string) error {
-		return nil
+		reexecCalled = true
+		return errors.New("must not run")
 	}
 
 	code := runWithStaleCheck(
-		[]string{"--unattended", "--workspace-name=test"},
+		[]string{"--version"},
 		&out, &errOut,
 		nil, // factory — should not be called
 		staleChecker,
 		reexecFn,
 	)
 
-	// When reexec succeeds (nil), run should return 0 — process was "replaced".
 	if code != 0 {
-		t.Errorf("stale+reexec-ok exit code = %d, want 0; stderr: %s", code, errOut.String())
+		t.Errorf("stale group exit code = %d, want 0; stderr: %s", code, errOut.String())
+	}
+	if reexecCalled {
+		t.Fatal("stale docker-group membership must not trigger re-exec in sudo mode")
 	}
 }
 
@@ -558,6 +562,7 @@ func TestRunStaleGroupReexecSuccess(t *testing.T) {
 // returns Stale=true but sg is not available (reexec returns an error), run()
 // prints a fallback line containing "newgrp docker" and returns exit code 75.
 func TestRunStaleGroupReexecFallback(t *testing.T) {
+	t.Skip("superseded: sudo Docker mode does not use docker-group re-exec")
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 
@@ -589,6 +594,34 @@ func TestRunStaleGroupReexecFallback(t *testing.T) {
 type sgNotFoundError struct{}
 
 func (e *sgNotFoundError) Error() string { return "sg not found: exec: sg: not found in PATH" }
+
+func TestProductionDockerRoutesFailBeforeDependenciesWithoutAuthorization(t *testing.T) {
+	authorizeDockerFn = func(bool) error { return errors.New("sudo credentials unavailable") }
+	t.Cleanup(func() { authorizeDockerFn = authorizeDocker })
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "update", args: []string{"update"}},
+		{name: "restart", args: []string{"restart"}},
+		{name: "headless", args: []string{"--unattended"}},
+		{name: "dry run", args: []string{"--dry-run"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if code := runWithStaleCheck(tt.args, &out, &errOut, nil, func() (bootstrap.StaleGroupResult, error) {
+				return bootstrap.StaleGroupResult{}, nil
+			}, nil); code != 1 {
+				t.Fatalf("exit code = %d, want 1", code)
+			}
+			if !strings.Contains(errOut.String(), "run `sudo -v` in a terminal") {
+				t.Fatalf("stderr = %q, want stable sudo remediation", errOut.String())
+			}
+		})
+	}
+}
 
 func TestRun_UpdateModeRoutesToUpdateFlow(t *testing.T) {
 	var out bytes.Buffer
@@ -842,6 +875,8 @@ func TestDefaultWorkspaceDirPrefersXDGConfigHome(t *testing.T) {
 }
 
 func TestRunUpdateUsesOperationalDefaultFactory(t *testing.T) {
+	authorizeDockerFn = func(bool) error { return nil }
+	t.Cleanup(func() { authorizeDockerFn = authorizeDocker })
 	runUpdateFn = func(context.Context, update.Config, update.Dependencies, io.Writer) error { return nil }
 	t.Cleanup(func() { runUpdateFn = update.Run })
 

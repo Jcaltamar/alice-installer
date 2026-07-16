@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -47,6 +48,7 @@ var version = "dev"
 var runHeadlessFn = headless.Run
 var runUpdateFn = update.Run
 var runRestartFn = restart.Run
+var authorizeDockerFn = authorizeDocker
 var newAsteriskHostDetector = func() asterisk.HostDetector {
 	return asterisk.HostEnvironmentDetector{}
 }
@@ -257,9 +259,11 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 	osGuard := platform.NewRuntimeOSGuard(nil)
 	archDetector := platform.NewRuntimeArchDetector(nil)
 	portScanner := ports.NewNetPortScanner()
-	dockerClient := docker.NewCLIDocker(nil)
-	composeRunner := compose.NewCLICompose(nil, nil)
-	gpuDetector := platform.NewDockerGPUDetector(nil)
+	dockerRunner := platform.SudoDockerCommandRunner{}
+	dockerStreamer := platform.SudoDockerStreamingCommandRunner{}
+	dockerClient := docker.NewCLIDocker(dockerRunner)
+	composeRunner := compose.NewCLICompose(dockerRunner, dockerStreamer)
+	gpuDetector := platform.NewDockerGPUDetector(dockerRunner)
 	passwordGen := secrets.CryptoRandGenerator{}
 	templater := &envgen.Templater{PasswordGen: passwordGen}
 	writer := envgen.AtomicWriter{}
@@ -310,6 +314,7 @@ func buildDependencies(_ context.Context, f flags, interactive bool) tui.Depende
 		AsteriskAvailable:    func() bool { return asteriskSupported },
 		PreflightCoordinator: coord,
 		Executor:             tui.NewExecutor(),
+		DockerAuthenticator:  tui.SudoDockerAuthenticator{},
 		Env:                  tui.DetectEnv(),
 		MediaDir:             f.MediaDir,
 		ConfigDir:            f.ConfigDir,
@@ -456,10 +461,7 @@ func runWithStaleCheck(
 	}
 
 	// -----------------------------------------------------------------------
-	// Stale docker-group gate — runs BEFORE ShowVersion, DryRun, or factory.
-	// When the user just ran `usermod -aG docker $USER` but hasn't re-logged
-	// in, the installer would fail the docker-daemon preflight.  Auto re-exec
-	// via `sg docker -c <argv>` so the child process inherits the new GID.
+	// Docker access is always mediated by sudo; docker-group membership is not required.
 	// -----------------------------------------------------------------------
 	if staleChecker == nil {
 		staleChecker = bootstrap.DetectStaleDockerGroup
@@ -468,24 +470,7 @@ func runWithStaleCheck(
 		reexecHelper = bootstrap.ReexecWithDockerGroup
 	}
 
-	staleResult, staleErr := staleChecker()
-	if staleErr == nil && staleResult.Stale {
-		execErr := reexecHelper(os.Args, os.Environ())
-		if execErr == nil {
-			// syscall.Exec replaced the process — control never reaches here in
-			// production.  In tests, the fake returns nil to signal "success".
-			return 0
-		}
-		// Re-exec failed: print fallback line and return EX_TEMPFAIL (75).
-		quotedArgs := make([]string, len(args))
-		for i, a := range args {
-			quotedArgs[i] = bootstrap.ShellQuote(a)
-		}
-		fallbackCmd := "newgrp docker && alice-installer " + strings.Join(quotedArgs, " ")
-		fmt.Fprintf(errOut, "error: failed to re-exec via sg: %v\n", execErr)
-		fmt.Fprintf(errOut, "run manually: %s\n", fallbackCmd)
-		return 75
-	}
+	_, _ = staleChecker, reexecHelper
 
 	if f.ShowVersion {
 		fmt.Fprintln(out, "alice-installer", version)
@@ -525,6 +510,16 @@ func runWithStaleCheck(
 	}
 	terminal := func(status, code string) {
 		log.Log(runlog.Event{Event: "terminal", Stage: "run", Status: status, Code: code})
+	}
+	if productionRun && (mode == modeUpdate || mode == modeRestart || f.DryRun || f.Unattended) {
+		interactiveAuth := !f.Unattended && isTTY(os.Stdin)
+		if authErr := authorizeDockerFn(interactiveAuth); authErr != nil {
+			terminal("failure", "docker-auth-failed")
+			fmt.Fprintln(errOut, "error: Docker authorization required; run `sudo -v` in a terminal, then retry")
+			printLog(errOut)
+			return 1
+		}
+		log.Log(runlog.Event{Event: "docker-auth", Stage: "authentication", Status: "succeeded"})
 	}
 
 	if mode == modeUpdate {
@@ -665,6 +660,20 @@ func isTTY(f *os.File) bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func authorizeDocker(interactive bool) error {
+	args := []string{"-n", "true"}
+	if interactive {
+		args = []string{"-v"}
+	}
+	cmd := exec.Command("sudo", args...)
+	if interactive {
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+	return cmd.Run()
 }
 
 func main() {

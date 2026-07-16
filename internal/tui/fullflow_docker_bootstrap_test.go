@@ -268,6 +268,7 @@ func TestFullFlowDockerMissingBootstrapsInstall(t *testing.T) {
 // is present but user is not in docker group, the installer offers docker_group_add
 // action with a post-action banner.
 func TestFullFlowUserNotInGroupBootstrapsGroupAdd(t *testing.T) {
+	t.Skip("superseded: sudo Docker mode never bootstraps docker-group membership")
 	dockerClient := newCountingDockerClient(errors.New("permission denied while trying to connect to Docker"))
 	env := BootstrapEnv{
 		UserName:            "alice",

@@ -63,6 +63,8 @@ const (
 	StateMigrationCancelled     State = iota
 	StateMigrationDisposition   State = iota
 	StateMigrationRemoveConfirm State = iota
+	StateDockerAuth             State = iota
+	StateDockerAuthFailed       State = iota
 )
 
 // TemplateAssets bundles the embedded installer assets.
@@ -99,6 +101,7 @@ type Dependencies struct {
 	LegacyRestoreAction    migration.LegacyRestoreAction
 	MigrationHandoff       MigrationHandoff
 	MigrationAuthenticator MigrationAuthenticator
+	DockerAuthenticator    MigrationAuthenticator
 
 	PreflightCoordinator preflight.Coordinator
 
@@ -159,6 +162,7 @@ type Model struct {
 	migrationRecoveryCode string
 	migrationDiagnostic   *installation.PM2ObservationDiagnostic
 	originalFailure       *InstallFailureMsg
+	pendingDockerAction   ContextAction
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -203,17 +207,13 @@ func portsConfigFromMap(ports map[string]int) envgen.PortsConfig {
 
 // NewModel constructs the root Model with all sub-models pre-initialised.
 func NewModel(deps Dependencies) Model {
-	// Detect GPU once at construction time so it's available for overlay selection.
-	gpuInfo := deps.GPU.Detect(context.Background())
-	gpuDetected := gpuInfo.ToolkitInstalled
-
 	backupSpinner := spinner.New()
 	backupSpinner.Spinner = spinner.Dot
 	backupSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(string(theme.ColorPrimary)))
 	return Model{
 		deps:                  deps,
 		state:                 StateSplash,
-		gpuDetected:           gpuDetected,
+		gpuDetected:           false,
 		attemptedActions:      map[string]bool{},
 		splash:                NewSplashModel(deps.Theme, deps.Version),
 		preflight:             NewPreflightModel(deps.Theme, deps.PreflightCoordinator),
@@ -238,6 +238,16 @@ func (m *Model) log(event runlog.Event) {
 }
 
 func boolPtr(value bool) *bool { return &value }
+
+func safeErrorClass(err error) string {
+	if err != nil {
+		text := strings.ToLower(err.Error())
+		if strings.Contains(text, "permission denied") || strings.Contains(text, "password is required") || strings.Contains(text, "not allowed to execute") {
+			return "permission"
+		}
+	}
+	return fmt.Sprintf("%T", err)
+}
 
 func (m *Model) applyMigrationPortPolicy() {
 	var exemptTCP, exemptUDP map[int]struct{}
@@ -381,14 +391,24 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 		}
 		switch msg.Action {
 		case ContextActionInstall:
-			m.state = StatePreflight
-			return m, m.preflight.Init()
-		case ContextActionUpdate:
-			m.state = StateUpdating
-			if m.deps.UpdateAction == nil {
-				return m, func() tea.Msg { return UpdateCompletedMsg{Err: fmt.Errorf("update action is unavailable")} }
+			if m.deps.DockerAuthenticator == nil {
+				m.state = StatePreflight
+				return m, m.preflight.Init()
 			}
-			return m, func() tea.Msg { return UpdateCompletedMsg{Err: m.deps.UpdateAction.Run(context.Background())} }
+			m.pendingDockerAction = msg.Action
+			m.state = StateDockerAuth
+			return m, m.deps.DockerAuthenticator.Authenticate()
+		case ContextActionUpdate:
+			if m.deps.DockerAuthenticator == nil {
+				m.state = StateUpdating
+				if m.deps.UpdateAction == nil {
+					return m, func() tea.Msg { return UpdateCompletedMsg{Err: fmt.Errorf("update action is unavailable")} }
+				}
+				return m, func() tea.Msg { return UpdateCompletedMsg{Err: m.deps.UpdateAction.Run(context.Background())} }
+			}
+			m.pendingDockerAction = msg.Action
+			m.state = StateDockerAuth
+			return m, m.deps.DockerAuthenticator.Authenticate()
 		case ContextActionUninstall:
 			m.state = StateBlockedOperation
 			m.blockedOperation = blockedOperationModel{theme: m.deps.Theme, action: msg.Action}
@@ -403,6 +423,30 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 			m.migrationEnvChoice = migrationEnvironmentModel{theme: m.deps.Theme}
 			return m, nil
 		}
+
+	case DockerAuthenticationCompletedMsg:
+		if m.state != StateDockerAuth {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.log(runlog.Event{Event: "docker-auth", Stage: "authentication", Status: "failed", Code: "docker-auth-failed", Fields: runlog.Fields{ErrorClass: "permission"}})
+			m.state = StateDockerAuthFailed
+			return m, nil
+		}
+		m.log(runlog.Event{Event: "docker-auth", Stage: "authentication", Status: "succeeded"})
+		m.gpuDetected = m.deps.GPU.Detect(context.Background()).ToolkitInstalled
+		switch m.pendingDockerAction {
+		case ContextActionInstall:
+			m.state = StatePreflight
+			return m, m.preflight.Init()
+		case ContextActionUpdate:
+			m.state = StateUpdating
+			if m.deps.UpdateAction == nil {
+				return m, func() tea.Msg { return UpdateCompletedMsg{Err: fmt.Errorf("update action is unavailable")} }
+			}
+			return m, func() tea.Msg { return UpdateCompletedMsg{Err: m.deps.UpdateAction.Run(context.Background())} }
+		}
+		return m, nil
 
 	case MigrationEnvironmentSelectedMsg:
 		if m.state != StateMigrationEnv || msg.Environment != migration.EnvironmentDevelopment && msg.Environment != migration.EnvironmentProduction {
@@ -824,7 +868,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 		if msg.Stage != "" {
 			code = msg.Stage + "-failed"
 		}
-		m.log(runlog.Event{Event: "original-failure", Stage: msg.Stage, Status: "failed", Code: code, Fields: runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}})
+		m.log(runlog.Event{Event: "original-failure", Stage: msg.Stage, Status: "failed", Code: code, Fields: runlog.Fields{ErrorClass: safeErrorClass(msg.Err)}})
 		if m.hasLiveMigrationLease() {
 			return m.beginMigrationRecovery()
 		}
@@ -1019,6 +1063,10 @@ func (m Model) View() string {
 		return m.deps.Theme.TextMuted.Render("Requesting migration authorization in the terminal…")
 	case StateMigrationAuthFailed:
 		return m.deps.Theme.Primary.Bold(true).Render("Migration authorization failed") + "\n\nMigration remains blocked. No backup preflight or filesystem mutation was started.\n"
+	case StateDockerAuth:
+		return m.deps.Theme.TextMuted.Render("Requesting Docker authorization in the terminal…")
+	case StateDockerAuthFailed:
+		return m.deps.Theme.Primary.Bold(true).Render("Docker authorization failed") + "\n\nRun `sudo -v` in a terminal, then retry. No Docker operation was started.\n"
 	case StateBackupPreflight:
 		return m.deps.Theme.TextMuted.Render("Reviewing legacy backup prerequisites…")
 	case StateBackupConfirm:

@@ -331,8 +331,8 @@ func TestHeadlessRun_BootstrapStillFailsAfterActions(t *testing.T) {
 	}
 
 	coord := preflight.Coordinator{
-		OS:   &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch: &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		OS:     &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:   &platform.FakeArchDetector{Arch: platform.ArchAMD64},
 		Docker: alwaysFailDocker,
 		// Compose passes — only docker_daemon keeps failing.
 		Compose:           &compose.FakeComposeRunner{VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"}},
@@ -396,7 +396,7 @@ func TestHeadlessRun_BootstrapStillFailsAfterActions(t *testing.T) {
 // TestHeadlessRun_DockerGroupAddRequiresRelogin
 // ---------------------------------------------------------------------------
 
-func TestHeadlessRun_DockerGroupAddRequiresRelogin(t *testing.T) {
+func TestHeadlessRun_DockerGroupIsNotRequired(t *testing.T) {
 	dir := t.TempDir()
 
 	// Docker daemon fails; user NOT in docker group → docker_group_add.
@@ -406,8 +406,8 @@ func TestHeadlessRun_DockerGroupAddRequiresRelogin(t *testing.T) {
 	}
 
 	coord := preflight.Coordinator{
-		OS:   &platform.FakeOSGuard{Linux: true, Name: "linux"},
-		Arch: &platform.FakeArchDetector{Arch: platform.ArchAMD64},
+		OS:     &platform.FakeOSGuard{Linux: true, Name: "linux"},
+		Arch:   &platform.FakeArchDetector{Arch: platform.ArchAMD64},
 		Docker: dockerFail,
 		Compose: &compose.FakeComposeRunner{
 			VersionVal: compose.Version{V2Plugin: true, Raw: "2.21.0"},
@@ -455,12 +455,13 @@ func TestHeadlessRun_DockerGroupAddRequiresRelogin(t *testing.T) {
 	var buf bytes.Buffer
 	err := headless.Run(context.Background(), cfg, deps, &buf)
 
-	if err == nil {
-		t.Fatal("expected ErrReloginRequired but got nil")
+	if errors.Is(err, headless.ErrReloginRequired) {
+		t.Errorf("Docker group must not require relogin in sudo mode: %v", err)
 	}
-
-	if !errors.Is(err, headless.ErrReloginRequired) {
-		t.Errorf("expected errors.Is(err, ErrReloginRequired), got: %v", err)
+	for _, call := range fakeExec.calls {
+		if strings.Contains(call, "usermod") {
+			t.Fatalf("unexpected docker-group mutation: %s", call)
+		}
 	}
 }
 
