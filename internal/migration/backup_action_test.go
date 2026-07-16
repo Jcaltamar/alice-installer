@@ -217,6 +217,7 @@ func TestBackupPreconditionDiagnosticsIdentifyInternalFailure(t *testing.T) {
 		{name: "identity mismatch", err: classifiedContainerError(ErrContainerIdentity), code: BackupFailureLegacyContainerIdentityMismatch},
 		{name: "endpoint mismatch", err: classifiedContainerError(ErrContainerEndpoint), code: BackupFailureLegacyContainerEndpointMismatch},
 		{name: "unsafe state", err: classifiedContainerError(ErrContainerUnsafeState), code: BackupFailureLegacyContainerUnsafe},
+		{name: "stopped legacy master", err: classifiedContainerError(ErrContainerStopped), code: BackupFailureLegacyContainerStopped},
 		{name: "ambiguous", err: ErrAmbiguousContainer, code: BackupFailureLegacyContainerAmbiguous},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -225,6 +226,10 @@ func TestBackupPreconditionDiagnosticsIdentifyInternalFailure(t *testing.T) {
 				t.Fatalf("diagnostics = %#v", result)
 			}
 		})
+	}
+	stopped := BackupPreflightFailureResult(classifiedContainerError(ErrContainerStopped))
+	if stopped.Remediation != BackupRemediationRestartLegacyContainer || !strings.Contains(stopped.Remediation.String(), "will not start it automatically") {
+		t.Fatalf("stopped remediation = %q", stopped.Remediation.String())
 	}
 }
 

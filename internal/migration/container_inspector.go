@@ -68,6 +68,7 @@ func (i DockerCLIInspector) Inspect(ctx context.Context, id string) (ContainerDe
 
 type dockerInspect struct {
 	ID     string `json:"Id"`
+	Name   string `json:"Name"`
 	Config struct {
 		Image  string            `json:"Image"`
 		Env    []string          `json:"Env"`
@@ -102,7 +103,7 @@ func safeDetails(raw dockerInspect) (ContainerDetails, bool) {
 	if !fullContainerID.MatchString(raw.ID) || !trusted {
 		return ContainerDetails{}, false
 	}
-	details := ContainerDetails{ID: raw.ID, Image: string(canonicalImage), NetworkMode: raw.HostConfig.NetworkMode, Health: HealthNone, Labels: SafeContainerLabels{ComposeProject: raw.Config.Labels["com.docker.compose.project"], ComposeService: raw.Config.Labels["com.docker.compose.service"]}}
+	details := ContainerDetails{ID: raw.ID, Name: strings.TrimPrefix(raw.Name, "/"), Image: string(canonicalImage), NetworkMode: raw.HostConfig.NetworkMode, Health: HealthNone, Labels: SafeContainerLabels{ComposeProject: raw.Config.Labels["com.docker.compose.project"], ComposeService: raw.Config.Labels["com.docker.compose.service"]}}
 	if raw.State.Running {
 		details.State = ContainerRunning
 	} else {

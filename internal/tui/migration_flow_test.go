@@ -173,6 +173,7 @@ func TestMigrationPreflightRendersSelectorSpecificSafeCodes(t *testing.T) {
 		{"identity mismatch", migration.ErrContainerIdentity, "backup-legacy-container-identity-mismatch"},
 		{"endpoint mismatch", migration.ErrContainerEndpoint, "backup-legacy-container-endpoint-mismatch"},
 		{"unsafe state", migration.ErrContainerUnsafeState, "backup-legacy-container-unsafe"},
+		{"stopped legacy master", migration.ErrContainerStopped, "backup-legacy-container-stopped"},
 		{"ambiguity", migration.ErrAmbiguousContainer, "backup-legacy-container-ambiguous"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -11,6 +11,8 @@ import (
 
 const PostgreSQL11Image ImageIdentity = "bitnami/postgresql:11-debian-10"
 
+const legacyPostgreSQLMasterName = "postgres_postgresql-master_1"
+
 func canonicalPostgreSQL11Image(reference string) (ImageIdentity, bool) {
 	switch reference {
 	case string(PostgreSQL11Image), "docker.io/bitnami/postgresql:11-debian-10":
@@ -27,6 +29,7 @@ var (
 	ErrContainerIdentity     = errors.New("legacy database container identity mismatch")
 	ErrContainerEndpoint     = errors.New("legacy database container endpoint mismatch")
 	ErrContainerUnsafeState  = errors.New("legacy database container has unsafe state or provenance")
+	ErrContainerStopped      = errors.New("legacy database container is stopped")
 )
 
 type ImageIdentity string
@@ -77,6 +80,7 @@ type SafeContainerLabels struct {
 // ContainerDetails contains only non-secret, allowlisted metadata required by the selector.
 type ContainerDetails struct {
 	ID             string
+	Name           string
 	Image          string
 	Digest         string
 	State          ContainerState
@@ -142,20 +146,26 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 	if inspectionFailed {
 		return ContainerIdentity{}, ErrContainerPrecondition
 	}
-	matches := make([]ContainerIdentity, 0, len(candidates))
-	identityMismatch, endpointMismatch, unsafeCandidate := false, false, false
+	matches := make([]ContainerIdentity, 0, 1)
+	identityMismatch, endpointMismatch, unsafeCandidate, stoppedCandidate := false, false, false, false
 	for _, candidate := range candidates {
 		details := detailsByID[candidate.ID]
+		if details.Name != legacyPostgreSQLMasterName {
+			continue
+		}
 		corroborated, reason := correlateCandidate(details, config)
 		identityMismatch = identityMismatch || reason == ErrContainerIdentity
 		endpointMismatch = endpointMismatch || reason == ErrContainerEndpoint
 		unsafeCandidate = unsafeCandidate || reason == ErrContainerUnsafeState
+		stoppedCandidate = stoppedCandidate || reason == ErrContainerStopped
 		if corroborated {
 			matches = append(matches, ContainerIdentity{ID: details.ID, Image: PostgreSQL11Image, Digest: details.Digest})
 		}
 	}
 	if len(matches) == 0 {
 		switch {
+		case stoppedCandidate:
+			return ContainerIdentity{}, classifiedContainerError(ErrContainerStopped)
 		case unsafeCandidate:
 			return ContainerIdentity{}, classifiedContainerError(ErrContainerUnsafeState)
 		case endpointMismatch:
@@ -175,11 +185,19 @@ func DiscoverContainer(ctx context.Context, inspector ContainerInspector, config
 // correlateCandidate distinguishes insufficient unrelated evidence from unsafe contradictions.
 // It is called only after every exact-image candidate has been inspected successfully.
 func correlateCandidate(details ContainerDetails, config ResolvedConfig) (bool, error) {
-	if _, trusted := canonicalPostgreSQL11Image(details.Image); !fullContainerID.MatchString(details.ID) || !trusted {
+	if _, trusted := canonicalPostgreSQL11Image(details.Image); details.Name != legacyPostgreSQLMasterName || !fullContainerID.MatchString(details.ID) || !trusted {
 		return false, ErrContainerIdentity
 	}
 	if !contains(details.DatabaseNames, config.Database) || !contains(details.Usernames, config.Username) {
 		return false, ErrContainerIdentity
+	}
+	labelsPresent := details.Labels.ComposeProject != "" || details.Labels.ComposeService != ""
+	labelsMatch := details.Labels.ComposeProject == "postgres" && details.Labels.ComposeService == "postgresql-master"
+	if labelsPresent && !labelsMatch {
+		return false, ErrContainerIdentity
+	}
+	if len(details.MountKinds) == 0 && !labelsMatch {
+		return false, ErrContainerUnsafeState
 	}
 	endpointMatches, endpointConflicts := containerLocalEndpointEvidence(details.Endpoints, config.Host, config.Port)
 	if loopbackFamily(config.Host) != 0 {
@@ -188,10 +206,13 @@ func correlateCandidate(details ContainerDetails, config ResolvedConfig) (bool, 
 	if !endpointMatches {
 		return false, ErrContainerEndpoint
 	}
-	if endpointConflicts || details.State != ContainerRunning || details.Health == HealthUnhealthy || details.Health == HealthUnknown {
+	if endpointConflicts {
 		return false, ErrContainerUnsafeState
 	}
-	if len(details.MountKinds) == 0 && details.Labels.ComposeProject == "" && details.Labels.ComposeService == "" {
+	if details.State == ContainerStopped {
+		return false, ErrContainerStopped
+	}
+	if details.State != ContainerRunning || details.Health == HealthUnhealthy || details.Health == HealthUnknown {
 		return false, ErrContainerUnsafeState
 	}
 	return true, nil
