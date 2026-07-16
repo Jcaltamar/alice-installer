@@ -15,19 +15,23 @@ import (
 )
 
 type fakeMigrationHandoff struct {
-	beginCalls    int
-	failureCalls  int
-	successCalls  int
-	beginErr      error
-	recovery      installation.PM2Recovery
-	recoveryErr   error
-	lastBackupRef migration.BackupRef
+	beginCalls       int
+	failureCalls     int
+	successCalls     int
+	beginErr         error
+	recovery         installation.PM2Recovery
+	recoveryErr      error
+	lastFailureLease *migration.PreInstallMigrationLease
+	lastBackupRef    migration.BackupRef
 }
 
 type failingRootObservationRunner struct{}
 
-func (failingRootObservationRunner) Run(context.Context, string, ...string) ([]byte, []byte, error) {
-	return []byte(`[{"pm2_env":{"DATABASE_URL":"postgres://secret"}}]`), []byte("sudo: a password is required\n"), errors.New("exit status 1")
+func (failingRootObservationRunner) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+	if len(args) > 1 && args[1] == "pm2" {
+		return []byte(`[{"pm_id":1,"pid":0,"name":"front-guardian","pm_exec_path":"/usr/bin/bash","pm2_env":{"cwd":"/opt/front-guardian","status":"stopped"}}]`), nil, nil
+	}
+	return nil, []byte("sudo: a password is required\n"), errors.New("exit status 1")
 }
 
 type invalidRootObservationRunner struct{}
@@ -65,16 +69,19 @@ func (h *fakeMigrationHandoff) CompleteSuccess(*migration.PreInstallMigrationLea
 	return nil
 }
 
-func (h *fakeMigrationHandoff) CompleteFailure(*migration.PreInstallMigrationLease) (installation.PM2Recovery, error) {
+func (h *fakeMigrationHandoff) CompleteFailure(lease *migration.PreInstallMigrationLease) (installation.PM2Recovery, error) {
 	h.failureCalls++
+	h.lastFailureLease = lease
 	return h.recovery, h.recoveryErr
 }
 
 func TestMigrationQuiescenceAcquiresLeaseBeforePreflight(t *testing.T) {
 	deps := buildTestDeps()
 	handoff := &fakeMigrationHandoff{}
+	refresher := &fakeMigrationAuthorizationRefresher{}
 	deps.LegacyRestoreAction = &fakeLegacyRestoreAction{result: migration.RestoreResult{Outcome: migration.RestoreSucceeded}}
 	deps.MigrationHandoff = handoff
+	deps.MigrationAuthRefresher = refresher
 	m := NewModel(deps)
 	m.state = StateBackupRunning
 
@@ -97,6 +104,11 @@ func TestMigrationQuiescenceAcquiresLeaseBeforePreflight(t *testing.T) {
 	}
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationAuthRefresh || cmd == nil || refresher.calls != 1 || handoff.beginCalls != 0 {
+		t.Fatalf("authorization state/cmd/refreshes/calls = %v/%v/%d/%d", m.state, cmd, refresher.calls, handoff.beginCalls)
+	}
 	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
 	if m.state != StateMigrationQuiescence || cmd == nil || handoff.beginCalls != 0 {
@@ -192,7 +204,7 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 	quiescer := installation.PM2Quiescer{
 		Snapshots: installation.LinuxPM2SnapshotProvider{
 			Inventory: installation.LinuxPM2Inventory{Runner: root},
-			Sockets:   unusedSocketSnapshot{},
+			Sockets:   installation.LinuxSocketSnapshot{Runner: root},
 			Proc:      unusedProcIdentity{},
 		},
 		Controller: installation.PM2Controller{Runner: root},
@@ -211,8 +223,8 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 	for _, want := range []string{
 		"pm2-observation-unavailable",
 		"Stage: initial-snapshot",
-		"Operation: pm2-jlist",
-		"Command: sudo -n pm2 jlist",
+		"Operation: socket-listeners",
+		"Command: sudo -n ss -H -ltnp",
 		"Cause: exit-1",
 	} {
 		if !strings.Contains(view, want) {
@@ -223,6 +235,31 @@ func TestPM2ObservationFailureDiagnosticReachesMigrationTerminal(t *testing.T) {
 		if strings.Contains(view, forbidden) {
 			t.Fatalf("terminal view leaked %q: %q", forbidden, view)
 		}
+	}
+}
+
+func TestMigrationQuiescenceRecoveryFailureRetainsLeaseForAuthorizedRetry(t *testing.T) {
+	deps := buildTestDeps()
+	handoff := &fakeMigrationHandoff{recovery: installation.PM2Recovery{Verified: true, Code: "pm2-recovery-verified"}}
+	deps.MigrationHandoff = handoff
+	deps.MigrationAuthRefresher = &fakeMigrationAuthorizationRefresher{}
+	m := NewModel(deps)
+	m.state = StateMigrationQuiescence
+	lease := &migration.PreInstallMigrationLease{}
+	updated, cmd := m.Update(MigrationQuiescenceCompletedMsg{Lease: lease, Err: errors.New("sudo authorization expired")})
+	m = updated.(Model)
+	if m.state != StateMigrationAuthRefresh || cmd == nil || m.migrationLease != lease {
+		t.Fatalf("retry authorization state/cmd/lease = %v/%v/%t", m.state, cmd, m.migrationLease == lease)
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationRecovery || cmd == nil {
+		t.Fatalf("retry state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.state != StateMigrationResult || handoff.failureCalls != 1 || handoff.lastFailureLease != lease || m.migrationRecoveryCode != "pm2-recovery-verified" {
+		t.Fatalf("result/calls/lease/code = %v/%d/%t/%q", m.state, handoff.failureCalls, handoff.lastFailureLease == lease, m.migrationRecoveryCode)
 	}
 }
 
@@ -410,6 +447,11 @@ func TestMigrationLiveLeaseTerminalPathsRecoverExceptInstallSuccess(t *testing.T
 			}
 			updated, cmd := m.Update(msg)
 			m = updated.(Model)
+			if m.state != StateMigrationAuthRefresh || cmd == nil || handoff.failureCalls != 0 {
+				t.Fatalf("authorization state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.failureCalls)
+			}
+			updated, cmd = m.Update(cmd())
+			m = updated.(Model)
 			if m.state != StateMigrationRecovery || cmd == nil || handoff.failureCalls != 0 {
 				t.Fatalf("recovery state/cmd/calls = %v/%v/%d", m.state, cmd, handoff.failureCalls)
 			}
@@ -444,6 +486,11 @@ func TestMigrationRecoveryPanicBecomesBoundedTerminalResult(t *testing.T) {
 	m.state, m.migrationPending, m.migrationLease = StateDeploy, true, &migration.PreInstallMigrationLease{}
 
 	updated, cmd := m.Update(MigrationAbandonedMsg{})
+	m = updated.(Model)
+	if m.state != StateMigrationAuthRefresh || cmd == nil {
+		t.Fatalf("panic recovery authorization = state:%v cmd:%v", m.state, cmd)
+	}
+	updated, cmd = m.Update(cmd())
 	m = updated.(Model)
 	if m.state != StateMigrationRecovery || cmd == nil {
 		t.Fatalf("panic recovery start = state:%v cmd:%v", m.state, cmd)
@@ -512,10 +559,15 @@ func TestMigrationRestoreCancellationWaitsForDatabaseResultBeforePM2Recovery(t *
 	if m.state != StateDatabaseRestore || cmd != nil || handoff.failureCalls != 0 {
 		t.Fatalf("cancellation must wait for restore completion: state/cmd/recovery = %v/%v/%d", m.state, cmd, handoff.failureCalls)
 	}
-	updated, recoveryCmd := m.Update(restoreCmd())
+	updated, authorizationCmd := m.Update(restoreCmd())
+	m = updated.(Model)
+	if m.state != StateMigrationAuthRefresh || authorizationCmd == nil || handoff.failureCalls != 0 {
+		t.Fatalf("database result must precede recovery authorization: state/cmd/recovery = %v/%v/%d", m.state, authorizationCmd, handoff.failureCalls)
+	}
+	updated, recoveryCmd := m.Update(authorizationCmd())
 	m = updated.(Model)
 	if m.state != StateMigrationRecovery || recoveryCmd == nil || handoff.failureCalls != 0 {
-		t.Fatalf("database result must precede PM2 recovery: state/cmd/recovery = %v/%v/%d", m.state, recoveryCmd, handoff.failureCalls)
+		t.Fatalf("authorization must precede PM2 recovery: state/cmd/recovery = %v/%v/%d", m.state, recoveryCmd, handoff.failureCalls)
 	}
 	_, _ = m.Update(recoveryCmd())
 }

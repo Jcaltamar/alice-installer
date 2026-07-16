@@ -28,8 +28,13 @@ func TestOriginalFailureIsRetainedBeforeRecoveryResult(t *testing.T) {
 
 	updated, cmd := m.Update(InstallFailureMsg{Stage: "verify", Err: errors.New("postgres://canary-secret")})
 	m = updated.(Model)
+	if cmd == nil || m.state != StateMigrationAuthRefresh {
+		t.Fatalf("authorization state/cmd = %v/%v", m.state, cmd)
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(Model)
 	if cmd == nil || m.state != StateMigrationRecovery {
-		t.Fatalf("state/cmd = %v/%v", m.state, cmd)
+		t.Fatalf("recovery state/cmd = %v/%v", m.state, cmd)
 	}
 	updated, _ = m.Update(cmd())
 	m = updated.(Model)

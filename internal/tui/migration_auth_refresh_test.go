@@ -94,6 +94,41 @@ func TestMigrationPullCompleteExpiredAuthorizationPromptsThenDeploys(t *testing.
 	}
 }
 
+func TestMigrationRecoveryRefreshesAuthorizationAndPreservesOriginalFailure(t *testing.T) {
+	for _, refreshErr := range []error{nil, errors.New("cancelled")} {
+		name := "success"
+		if refreshErr != nil {
+			name = "failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			deps := buildTestDeps()
+			refresher := &fakeMigrationAuthorizationRefresher{err: refreshErr}
+			handoff := &fakeMigrationHandoff{}
+			deps.MigrationAuthRefresher = refresher
+			deps.MigrationHandoff = handoff
+			m := NewModel(deps)
+			m.migrationPending = true
+			m.migrationLease = &migration.PreInstallMigrationLease{}
+			original := &InstallFailureMsg{Err: errors.New("restore failed"), Stage: "database-restore"}
+			m.originalFailure = original
+
+			m, cmd := m.beginMigrationRecovery()
+			if m.state != StateMigrationAuthRefresh || cmd == nil || refresher.calls != 1 || handoff.failureCalls != 0 {
+				t.Fatalf("refresh state/cmd/calls/recovery = %v/%v/%d/%d", m.state, cmd, refresher.calls, handoff.failureCalls)
+			}
+			updated, recoveryCmd := m.Update(cmd())
+			m = updated.(Model)
+			if m.state != StateMigrationRecovery || recoveryCmd == nil || m.originalFailure != original || handoff.failureCalls != 0 {
+				t.Fatalf("recovery state/cmd/original/calls = %v/%v/%p/%d", m.state, recoveryCmd, m.originalFailure, handoff.failureCalls)
+			}
+			_ = recoveryCmd()
+			if handoff.failureCalls != 1 {
+				t.Fatalf("recovery calls = %d, want 1", handoff.failureCalls)
+			}
+		})
+	}
+}
+
 func TestMigrationAuthorizationRefreshFailureRecoversWithoutDeploy(t *testing.T) {
 	validator := &fakeMigrationAuthorizationValidator{err: errors.New("authorization expired")}
 	refresher := &fakeMigrationAuthorizationRefresher{err: errors.New("cancelled")}

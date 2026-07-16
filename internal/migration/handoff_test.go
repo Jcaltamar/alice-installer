@@ -32,10 +32,29 @@ func TestPreInstallMigrationCoordinatorBeginRequiresBackupCompleteQuiescenceAndC
 		t.Fatalf("incomplete lease = %#v, err = %v", lease, err)
 	}
 	quiescer.stopped, quiescer.err = acknowledgedQuiescence(), errors.New("partial stop")
-	if lease, err := coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop); err == nil || lease != nil || quiescer.recoverCalls != 1 {
+	quiescer.recoveryErr = errors.New("sudo authorization expired")
+	lease, err = coordinator.Begin(context.Background(), BackupRef{}, id, DispositionStop)
+	if err == nil || lease == nil || quiescer.recoverCalls != 1 {
 		t.Fatalf("partial lease = %#v, recoveries = %d, err = %v", lease, quiescer.recoverCalls, err)
 	}
+	var recoveryFailure installation.QuiescenceError
+	if !errors.As(err, &recoveryFailure) || recoveryFailure.Code != "pm2-recovery-unproven" {
+		t.Fatalf("recovery failure = %#v, err = %v", recoveryFailure, err)
+	}
+	quiescer.recoveryErr = nil
+	if recovery, retryErr := coordinator.CompleteFailure(lease); retryErr != nil || !recovery.Verified || quiescer.recoverCalls != 2 || container.events == nil || strings.Contains(strings.Join(*container.events, ","), "container-recover") {
+		t.Fatalf("retry = %#v, recoveries = %d, events = %q, err = %v", recovery, quiescer.recoverCalls, strings.Join(*container.events, ","), retryErr)
+	}
 }
+func TestPreInstallMigrationCoordinatorAcceptsVerifiedNoopQuiescence(t *testing.T) {
+	quiescer := &handoffQuiescer{stopped: installation.PM2Quiescence{NoopVerified: true}}
+	coordinator := PreInstallMigrationCoordinator{Legacy: &handoffBackup{}, PM2: quiescer, Container: &handoffContainer{}}
+	lease, err := coordinator.Begin(context.Background(), BackupRef{}, strings.Repeat("a", 64), DispositionStop)
+	if err != nil || lease == nil || len(lease.PM2Targets()) != 0 {
+		t.Fatalf("lease = %#v, targets = %#v, err = %v", lease, lease.PM2Targets(), err)
+	}
+}
+
 func TestPreInstallMigrationCoordinatorCompletionConsumesLeaseOnce(t *testing.T) {
 	backup, quiescer := &handoffBackup{}, &handoffQuiescer{stopped: acknowledgedQuiescence()}
 	contexts := 0
@@ -96,6 +115,7 @@ type handoffQuiescer struct {
 	stopped       installation.PM2Quiescence
 	recoverCalls  int
 	err           error
+	recoveryErr   error
 	requireBudget time.Duration
 }
 
@@ -146,6 +166,9 @@ func (q *handoffQuiescer) Recover(ctx context.Context, _ installation.PM2Quiesce
 		return installation.PM2Recovery{}, errors.New("recovery context is unbounded")
 	}
 	q.recoverCalls++
+	if q.recoveryErr != nil {
+		return installation.PM2Recovery{Attempted: 1, Code: "pm2-recovery-unproven"}, q.recoveryErr
+	}
 	if deadline, ok := ctx.Deadline(); q.requireBudget > 0 && (!ok || time.Until(deadline) < q.requireBudget) {
 		return installation.PM2Recovery{}, errors.New("PM2 recovery budget was consumed")
 	}

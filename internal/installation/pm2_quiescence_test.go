@@ -142,6 +142,25 @@ func TestCorrelatePM2SelectsOnlyProductionEligibleIdentities(t *testing.T) {
 		t.Fatalf("zero ID contract = %#v, %v", got, err)
 	}
 }
+func TestCorrelatePM2AcceptsAllStoppedLegacyServicesAsNoop(t *testing.T) {
+	records := []PM2Record{
+		{ID: 1, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "stopped"},
+		{ID: 2, Name: "ws", CWD: backendRoot + "/websocket", ExecPath: "/usr/bin/bash", Status: "stopped"},
+		{ID: 5, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "stopped"},
+	}
+	selected, err := CorrelatePM2(records, nil, nil)
+	if err != nil || len(selected) != 0 {
+		t.Fatalf("selected = %#v, err = %v", selected, err)
+	}
+	if _, err := CorrelatePM2(records, []SocketOwner{{PID: 99, Port: 8080}}, nil); err == nil {
+		t.Fatal("stopped inventory with an approved live socket was accepted")
+	}
+	nearMatch := append(records, PM2Record{ID: 9, PID: 99, Name: "front-guardian-old", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"})
+	if _, err := CorrelatePM2(nearMatch, []SocketOwner{{PID: 99, Port: 8080}}, map[int]ProcIdentity{99: {CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 1}}); err == nil {
+		t.Fatal("stopped inventory with an online near-match listener was accepted")
+	}
+}
+
 func TestCorrelatePM2RejectsExecutableContractDrift(t *testing.T) {
 	base := PM2Record{ID: 1, PID: 1230, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}
 	baseProc := ProcIdentity{CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 42}
@@ -174,6 +193,22 @@ func TestCorrelatePM2SelectsExactContractWhenPIDOwnsMultipleApprovedPorts(t *tes
 		t.Fatalf("selected = %#v, %v", got, err)
 	}
 }
+func TestPM2QuiescerVerifiesAlreadyStoppedServicesWithoutMutation(t *testing.T) {
+	alreadyStopped := PM2Snapshot{Records: []PM2Record{
+		{ID: 1, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "stopped"},
+		{ID: 2, Name: "ws", CWD: backendRoot + "/websocket", ExecPath: "/usr/bin/bash", Status: "stopped"},
+	}}
+	runner := &recoveryRunner{}
+	quiescence, err := (PM2Quiescer{Snapshots: &snapshotSequence{items: []PM2Snapshot{alreadyStopped, alreadyStopped}}, Controller: PM2Controller{Runner: runner}}).Quiesce(context.Background())
+	if err != nil || !quiescence.NoopVerified || len(quiescence.Processes) != 0 || len(quiescence.Evidence) != 0 || len(runner.commands) != 0 {
+		t.Fatalf("quiescence = %#v, commands = %v, err = %v", quiescence, runner.commands, err)
+	}
+	recovery, err := (PM2Quiescer{}).Recover(context.Background(), quiescence)
+	if err != nil || !recovery.Verified || recovery.Attempted != 0 || recovery.Recovered != 0 || recovery.Code != "pm2-recovery-verified" {
+		t.Fatalf("recovery = %#v, err = %v", recovery, err)
+	}
+}
+
 func TestPM2QuiescerProvesFullStoppedSetAndRejectsRespawn(t *testing.T) {
 	before := PM2Snapshot{Records: []PM2Record{{ID: 1, PID: 11, Name: "front-guardian", CWD: guardianRoot, ExecPath: "/usr/bin/bash", Status: "online"}, {ID: 2, PID: 22, Name: "node", CWD: backendRoot + "/node", ExecPath: backendRoot + "/node/bin/www", Status: "online"}}, Sockets: []SocketOwner{{PID: 11, Port: 8080}, {PID: 22, Port: 9090}}, Proc: map[int]ProcIdentity{11: {CWD: guardianRoot, ExecPath: "/usr/local/bin/node", StartTicks: 9}, 22: {CWD: backendRoot + "/node", ExecPath: "/usr/local/bin/node", StartTicks: 10}}}
 	afterOne := PM2Snapshot{Records: append([]PM2Record(nil), before.Records...), Sockets: []SocketOwner{{PID: 22, Port: 9090}}, Proc: before.Proc}

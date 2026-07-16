@@ -42,8 +42,9 @@ type PM2StoppedEvidence struct {
 	StopVerified         bool
 }
 type PM2Quiescence struct {
-	Processes []PM2ProcessIdentity
-	Evidence  []PM2StoppedEvidence
+	Processes    []PM2ProcessIdentity
+	Evidence     []PM2StoppedEvidence
+	NoopVerified bool
 }
 type PM2Recovery struct {
 	Attempted, Recovered int
@@ -211,7 +212,12 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 		owners[socket.PID][socket.Port] = true
 	}
 	selected := make([]PM2ProcessIdentity, 0)
+	relevantStopped, relevantOnline := false, false
 	for _, record := range records {
+		if matchesPM2ContractRecord(record) {
+			relevantStopped = relevantStopped || record.Status == "stopped"
+			relevantOnline = relevantOnline || record.Status == "online"
+		}
 		if record.ID < 0 {
 			continue
 		}
@@ -237,6 +243,9 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 		selected = append(selected, PM2ProcessIdentity{PMID: record.ID, Name: record.Name, PID: record.PID, CWD: identity.CWD, ExecPath: record.ExecPath, RuntimeExecPath: identity.ExecPath, Port: port, StartTicks: identity.StartTicks})
 	}
 	if len(selected) == 0 {
+		if relevantStopped && !relevantOnline && len(sockets) == 0 {
+			return []PM2ProcessIdentity{}, nil
+		}
 		return nil, errors.New("no qualifying PM2 identity")
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].PMID < selected[j].PMID })
@@ -246,6 +255,16 @@ func CorrelatePM2(records []PM2Record, sockets []SocketOwner, proc map[int]ProcI
 type pm2ServiceContract struct {
 	name, cwd, pm2ExecPath, runtimeExecPath string
 	port                                    uint16
+}
+
+func matchesPM2ContractRecord(record PM2Record) bool {
+	for _, port := range []uint16{4550, 8080, 9090} {
+		contract, ok := allowedPM2Contract(record.Name, record.CWD, port)
+		if ok && record.ExecPath == contract.pm2ExecPath {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedPM2Contract(name, cwd string, port uint16) (pm2ServiceContract, bool) {
@@ -318,6 +337,18 @@ func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 		return PM2Quiescence{}, QuiescenceError{Code: "pm2-correlation-failed"}
 	}
 	stopped := PM2Quiescence{Processes: append([]PM2ProcessIdentity(nil), pending...)}
+	if len(pending) == 0 {
+		final, err := q.snapshot(ctx)
+		if err != nil {
+			return stopped, QuiescenceError{Code: "pm2-observation-unavailable", Diagnostic: withObservationStage(err, "final-snapshot")}
+		}
+		active, err := CorrelatePM2(final.Records, final.Sockets, final.Proc)
+		if err != nil || len(active) != 0 {
+			return stopped, QuiescenceError{Code: "pm2-final-state-unproven"}
+		}
+		stopped.NoopVerified = true
+		return stopped, nil
+	}
 	for len(pending) > 0 {
 		current, err := q.snapshot(ctx)
 		if err != nil {
@@ -344,6 +375,9 @@ func (q PM2Quiescer) Quiesce(ctx context.Context) (PM2Quiescence, error) {
 	return stopped, nil
 }
 func (q PM2Quiescer) Recover(ctx context.Context, stopped PM2Quiescence) (PM2Recovery, error) {
+	if stopped.NoopVerified && len(stopped.Processes) == 0 && len(stopped.Evidence) == 0 {
+		return PM2Recovery{Verified: true, Code: "pm2-recovery-verified"}, nil
+	}
 	targets, ok := acknowledgedRecoveryTargets(stopped)
 	if !ok || q.Snapshots == nil || q.Controller.Runner == nil {
 		return PM2Recovery{Code: "pm2-recovery-invalid"}, errors.New("pm2 recovery is invalid")

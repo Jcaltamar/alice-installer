@@ -60,10 +60,11 @@ var socketPID = regexp.MustCompile(`pid=([0-9]+),`)
 var migrationPorts = map[uint16]bool{4550: true, 8080: true, 9090: true}
 
 func ParseSocketSnapshot(data []byte) ([]SocketOwner, error) {
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) == 0 || lines[0] == "" {
-		return nil, errors.New("socket snapshot is empty")
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return []SocketOwner{}, nil
 	}
+	lines := strings.Split(trimmed, "\n")
 	ports := map[uint16]int{}
 	seen := map[SocketOwner]bool{}
 	owners := make([]SocketOwner, 0, len(migrationPorts))

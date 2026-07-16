@@ -133,40 +133,42 @@ type Model struct {
 	width, height int
 
 	// Sub-models (only the active one matters at any given time).
-	splash                SplashModel
-	preflight             PreflightModel
-	bootstrap             BootstrapModel
-	workspace             WorkspaceInputModel
-	optionalPackagesModel OptionalPackagesModel
-	portscan              PortScanModel
-	envwrite              EnvWriteModel
-	asteriskSetup         AsteriskSetupModel
-	pull                  PullModel
-	deploy                DeployModel
-	verify                VerifyModel
-	result                ResultModel
-	contextMenu           ContextMenuModel
-	blockedOperation      blockedOperationModel
-	actionResult          actionResultModel
-	migrationEnvChoice    migrationEnvironmentModel
-	migrationDisposition  migrationDispositionModel
-	containerDisposition  migration.ContainerDisposition
-	backupPlan            migration.BackupPlan
-	backupResult          migration.BackupResult
-	backupCancel          context.CancelFunc
-	backupCancelling      bool
-	backupSpinner         spinner.Model
-	backupProgress        <-chan tea.Msg
-	backupStage           migration.BackupProgressStage
-	backupElapsed         time.Duration
-	restoreCancel         context.CancelFunc
-	quiescenceCancel      context.CancelFunc
-	restoreResult         migration.RestoreResult
-	migrationLease        *migration.PreInstallMigrationLease
-	migrationRecoveryCode string
-	migrationDiagnostic   *installation.PM2ObservationDiagnostic
-	originalFailure       *InstallFailureMsg
-	pendingDockerAction   ContextAction
+	splash                       SplashModel
+	preflight                    PreflightModel
+	bootstrap                    BootstrapModel
+	workspace                    WorkspaceInputModel
+	optionalPackagesModel        OptionalPackagesModel
+	portscan                     PortScanModel
+	envwrite                     EnvWriteModel
+	asteriskSetup                AsteriskSetupModel
+	pull                         PullModel
+	deploy                       DeployModel
+	verify                       VerifyModel
+	result                       ResultModel
+	contextMenu                  ContextMenuModel
+	blockedOperation             blockedOperationModel
+	actionResult                 actionResultModel
+	migrationEnvChoice           migrationEnvironmentModel
+	migrationDisposition         migrationDispositionModel
+	containerDisposition         migration.ContainerDisposition
+	backupPlan                   migration.BackupPlan
+	backupResult                 migration.BackupResult
+	backupCancel                 context.CancelFunc
+	backupCancelling             bool
+	backupSpinner                spinner.Model
+	backupProgress               <-chan tea.Msg
+	backupStage                  migration.BackupProgressStage
+	backupElapsed                time.Duration
+	restoreCancel                context.CancelFunc
+	quiescenceCancel             context.CancelFunc
+	restoreResult                migration.RestoreResult
+	migrationLease               *migration.PreInstallMigrationLease
+	migrationRecoveryCode        string
+	migrationDiagnostic          *installation.PM2ObservationDiagnostic
+	originalFailure              *InstallFailureMsg
+	quiescenceAuthPending        bool
+	migrationRecoveryAuthPending bool
+	pendingDockerAction          ContextAction
 
 	// Accumulated state carried across sub-models.
 	workspaceName    string
@@ -511,6 +513,28 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 		if m.state != StateMigrationAuthRefresh {
 			return m, nil
 		}
+		if m.migrationRecoveryAuthPending {
+			m.migrationRecoveryAuthPending = false
+			status := "succeeded"
+			if msg.Err != nil {
+				status = "failed"
+			}
+			m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "recovery-authorization", Status: status, Fields: runlog.Fields{ErrorClass: safeErrorClass(msg.Err)}})
+			if msg.Err != nil && m.originalFailure == nil {
+				failure := InstallFailureMsg{Err: msg.Err, Stage: "migration-recovery-authorization"}
+				m.originalFailure = &failure
+			}
+			return m.beginAuthorizedMigrationRecovery()
+		}
+		if m.quiescenceAuthPending {
+			m.quiescenceAuthPending = false
+			if msg.Err != nil {
+				m.state = StateMigrationResult
+				m.migrationRecoveryCode = "migration-auth-refresh-failed"
+				return m, nil
+			}
+			return m.beginMigrationQuiescence()
+		}
 		if msg.Err == nil {
 			m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "succeeded"})
 			return m.Update(DeployStartedMsg{})
@@ -518,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 		m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "authorization-refresh", Status: "failed", Code: "migration-auth-refresh-failed", Fields: runlog.Fields{ErrorClass: safeErrorClass(msg.Err)}})
 		failure := InstallFailureMsg{Err: msg.Err, Stage: "migration-authorization-refresh"}
 		m.originalFailure = &failure
-		return m.beginMigrationRecovery()
+		return m.beginAuthorizedMigrationRecovery()
 
 	case BackupPreflightCompletedMsg:
 		if m.state != StateBackupPreflight {
@@ -615,13 +639,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 			m.state = StateMigrationRemoveConfirm
 			return m, nil
 		}
-		return m.beginMigrationQuiescence()
+		return m.authorizeMigrationQuiescence()
 
 	case MigrationRemoveConfirmedMsg:
 		if m.state != StateMigrationRemoveConfirm || m.containerDisposition != migration.DispositionRemove {
 			return m, nil
 		}
-		return m.beginMigrationQuiescence()
+		return m.authorizeMigrationQuiescence()
 
 	case MigrationQuiescenceCompletedMsg:
 		if m.state != StateMigrationQuiescence {
@@ -629,6 +653,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, command tea.Cmd) {
 		}
 		m.quiescenceCancel = nil
 		if msg.Err != nil || msg.Lease == nil {
+			if msg.Lease != nil {
+				m.migrationLease = msg.Lease
+				m.migrationPending = true
+				failure := InstallFailureMsg{Err: msg.Err, Stage: "migration-quiescence-recovery"}
+				m.originalFailure = &failure
+				return m.beginMigrationRecovery()
+			}
 			m.state = StateMigrationResult
 			m.migrationRecoveryCode = boundedQuiescenceCode(msg.Err)
 			fields := runlog.Fields{ErrorClass: fmt.Sprintf("%T", msg.Err)}
@@ -1111,6 +1142,9 @@ func (m Model) View() string {
 	case StateMigrationAuthCheck:
 		return m.deps.Theme.TextMuted.Render("Checking migration authorization before deploy…")
 	case StateMigrationAuthRefresh:
+		if m.migrationRecoveryAuthPending {
+			return m.deps.Theme.TextMuted.Render("Requesting migration authorization in the terminal before bounded recovery…")
+		}
 		return m.deps.Theme.TextMuted.Render("Migration authorization expired. Requesting authorization in the terminal before deploy…")
 	case StateDockerAuth:
 		return m.deps.Theme.TextMuted.Render("Requesting Docker authorization in the terminal…")

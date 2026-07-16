@@ -109,6 +109,43 @@ func TestPM2QuiescerAcceptsStoppedZeroPIDLifecycle(t *testing.T) {
 	}
 }
 
+func TestPM2QuiescerRequiresSocketEvidenceForAlreadyStoppedServices(t *testing.T) {
+	runner := &stoppedPasswordRequiredRunner{}
+	root := RootPM2Boundary{Runner: runner}
+	provider := LinuxPM2SnapshotProvider{
+		Inventory: LinuxPM2Inventory{Runner: root},
+		Sockets:   LinuxSocketSnapshot{Runner: root},
+		Proc:      root,
+	}
+
+	if _, err := (PM2Quiescer{Snapshots: provider, Controller: PM2Controller{Runner: root}}).Quiesce(context.Background()); err == nil {
+		t.Fatal("password-required socket observation was accepted")
+	}
+	if runner.pm2Calls != 1 || runner.socketCalls != 1 {
+		t.Fatalf("sudo calls = pm2:%d socket:%d, want one failed snapshot", runner.pm2Calls, runner.socketCalls)
+	}
+}
+
+type stoppedPasswordRequiredRunner struct {
+	pm2Calls, socketCalls int
+}
+
+func (r *stoppedPasswordRequiredRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	if name != "sudo" || len(args) < 2 || args[0] != "-n" {
+		return nil, nil, errors.New("unexpected command")
+	}
+	if len(args) == 3 && args[1] == "pm2" && args[2] == "jlist" {
+		r.pm2Calls++
+		output, _ := json.Marshal([]map[string]any{{"pm_id": 1, "pid": 0, "name": "front-guardian", "pm_exec_path": "/usr/bin/bash", "pm2_env": map[string]any{"cwd": guardianRoot, "status": "stopped"}}})
+		return output, nil, nil
+	}
+	if len(args) == 4 && args[1] == "ss" && args[2] == "-H" && args[3] == "-ltnp" {
+		r.socketCalls++
+		return nil, []byte("sudo: a password is required\n"), errors.New("exit status 1")
+	}
+	return nil, nil, errors.New("unexpected command")
+}
+
 type pm2LifecycleRunner struct {
 	stopped   bool
 	stopCalls int

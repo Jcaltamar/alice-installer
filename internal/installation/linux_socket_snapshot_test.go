@@ -57,6 +57,15 @@ func TestLinuxSocketSnapshotUsesFixedBoundedRedactedAcquisition(t *testing.T) {
 	}
 }
 
+func TestParseSocketSnapshotAcceptsNoListeners(t *testing.T) {
+	for _, input := range []string{"", " \n\t"} {
+		owners, err := ParseSocketSnapshot([]byte(input))
+		if err != nil || len(owners) != 0 {
+			t.Fatalf("owners = %#v, err = %v", owners, err)
+		}
+	}
+}
+
 func TestParseSocketSnapshotFiltersProductionListeners(t *testing.T) {
 	lines := make([]string, 0, 59)
 	for i := 0; i < 56; i++ {

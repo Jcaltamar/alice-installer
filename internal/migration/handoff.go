@@ -19,6 +19,7 @@ type PreInstallMigrationLease struct {
 	quiescence  installation.PM2Quiescence
 	containerID string
 	disposition ContainerDisposition
+	pm2Only     bool
 	mu          sync.Mutex
 	consumed    bool
 }
@@ -50,7 +51,15 @@ func (c *PreInstallMigrationCoordinator) Begin(ctx context.Context, backup Backu
 	quiescence, err := c.PM2.Quiesce(ctx)
 	if err != nil || ctx.Err() != nil || !completeQuiescence(quiescence) {
 		if len(quiescence.Evidence) > 0 {
-			_, _ = c.recover(quiescence)
+			recovery, recoveryErr := c.recover(quiescence)
+			if recoveryErr != nil || !recovery.Verified {
+				code := recovery.Code
+				if code == "" {
+					code = "pm2-recovery-unproven"
+				}
+				lease := &PreInstallMigrationLease{owner: c, quiescence: cloneQuiescence(quiescence), pm2Only: true}
+				return lease, errors.Join(installation.QuiescenceError{Code: code, Diagnostic: recovery.Diagnostic}, err, recoveryErr)
+			}
 		}
 		return nil, errors.Join(errors.New("pre-install migration quiescence is incomplete"), err)
 	}
@@ -84,13 +93,16 @@ func (c *PreInstallMigrationCoordinator) CompleteFailure(lease *PreInstallMigrat
 	if err != nil || !first {
 		return installation.PM2Recovery{}, err
 	}
-	containerCtx, cancelContainer := c.recoveryContext()
-	container, containerErr := c.Container.Recover(containerCtx, lease.containerID, lease.disposition)
-	cancelContainer()
+	container, containerErr := ContainerDispositionResult{Verified: true}, error(nil)
+	if !lease.pm2Only {
+		containerCtx, cancelContainer := c.recoveryContext()
+		container, containerErr = c.Container.Recover(containerCtx, lease.containerID, lease.disposition)
+		cancelContainer()
+	}
 	pm2Ctx, cancelPM2 := c.recoveryContext()
 	pm2, pm2Err := c.PM2.Recover(pm2Ctx, quiescence)
 	cancelPM2()
-	if lease.disposition == DispositionRemove {
+	if !lease.pm2Only && lease.disposition == DispositionRemove {
 		pm2.Code = DispositionManualRecoveryCode
 	} else if containerErr != nil || !container.Verified {
 		pm2.Code = DispositionRecoveryUnprovenCode
@@ -123,6 +135,9 @@ func (c *PreInstallMigrationCoordinator) recoveryContext() (context.Context, con
 	return ctx, func() { timeoutCancel(); cancel() }
 }
 func completeQuiescence(quiescence installation.PM2Quiescence) bool {
+	if quiescence.NoopVerified {
+		return len(quiescence.Processes) == 0 && len(quiescence.Evidence) == 0
+	}
 	if len(quiescence.Processes) == 0 || len(quiescence.Processes) != len(quiescence.Evidence) {
 		return false
 	}
@@ -135,5 +150,5 @@ func completeQuiescence(quiescence installation.PM2Quiescence) bool {
 	return true
 }
 func cloneQuiescence(source installation.PM2Quiescence) installation.PM2Quiescence {
-	return installation.PM2Quiescence{Processes: append([]installation.PM2ProcessIdentity(nil), source.Processes...), Evidence: append([]installation.PM2StoppedEvidence(nil), source.Evidence...)}
+	return installation.PM2Quiescence{Processes: append([]installation.PM2ProcessIdentity(nil), source.Processes...), Evidence: append([]installation.PM2StoppedEvidence(nil), source.Evidence...), NoopVerified: source.NoopVerified}
 }

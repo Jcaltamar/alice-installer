@@ -40,6 +40,15 @@ type MigrationSuccessCompletedMsg struct {
 // cannot continue through the ordinary installer state machine.
 type MigrationAbandonedMsg struct{}
 
+func (m Model) authorizeMigrationQuiescence() (Model, tea.Cmd) {
+	if m.deps.MigrationAuthRefresher == nil {
+		return m.beginMigrationQuiescence()
+	}
+	m.state = StateMigrationAuthRefresh
+	m.quiescenceAuthPending = true
+	return m, m.deps.MigrationAuthRefresher.Refresh()
+}
+
 func (m Model) beginMigrationQuiescence() (Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.quiescenceCancel = cancel
@@ -69,6 +78,22 @@ func (m Model) beginMigrationRecovery() (Model, tea.Cmd) {
 	if m.quiescenceCancel != nil {
 		m.quiescenceCancel()
 		m.quiescenceCancel = nil
+	}
+	m.state = StateMigrationAuthRefresh
+	m.migrationRecoveryAuthPending = true
+	m.log(runlog.Event{Event: "migration-auth-refresh", Stage: "recovery-authorization", Status: "requested"})
+	if m.deps.MigrationAuthRefresher == nil {
+		return m, func() tea.Msg {
+			return MigrationAuthorizationRefreshCompletedMsg{Err: errors.New("migration authorization refresher is unavailable")}
+		}
+	}
+	return m, m.deps.MigrationAuthRefresher.Refresh()
+}
+
+func (m Model) beginAuthorizedMigrationRecovery() (Model, tea.Cmd) {
+	if !m.hasLiveMigrationLease() {
+		m.state = StateMigrationResult
+		return m, nil
 	}
 	m.state = StateMigrationRecovery
 	m.log(runlog.Event{Event: "recovery-start", Stage: "recovery", Status: "started"})
