@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /etc/docker \
     && printf '{"storage-driver":"fuse-overlayfs"}\n' > /etc/docker/daemon.json
 
-# Create a non-root user with passwordless sudo for the test.
-# The installer will add this user to the docker group during bootstrap.
+# Create a non-root user with preauthorized non-interactive sudo. The harness
+# verifies Docker works through sudo -n without granting docker-group access.
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/testuser \
     && chmod 0440 /etc/sudoers.d/testuser

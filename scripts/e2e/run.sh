@@ -2,21 +2,14 @@
 # scripts/e2e/run.sh — end-to-end test for alice-installer inside a systemd container.
 #
 # The test boots a clean Ubuntu 22.04 container with systemd as PID 1 and NO
-# Docker pre-installed.  The installer's bootstrap downloads Docker, creates
-# /opt dirs, and adds the test user to the docker group.  Because group
-# membership changes only take effect in a new login session, the installer
-# exits with code 75 (EX_TEMPFAIL / ErrReloginRequired) after the usermod
-# step.  A fresh docker exec then picks up the new group set.
+# Docker pre-installed.  The installer's bootstrap downloads Docker and creates
+# /opt dirs. Docker operations run as the non-root test user through
+# preauthorized `sudo -n`; docker-group membership is intentionally absent.
 #
 # Multi-pass sequence handled here:
-#   Pass 1 — installs Docker + /opt dirs → daemon not yet running → exit 1
-#             (ErrPreflightStillFailing, because the get.docker.com script
-#             does not guarantee the daemon is running after install on every
-#             distro/config combination).
-#             E2E helper: start the Docker daemon via systemd, then continue.
-#   Pass 2 — Docker daemon running, user not yet in group → runs usermod,
-#             exits 75 (ErrReloginRequired).
-#   Pass 3 — fresh docker exec (new group set) → all checks pass → exit 0.
+#   Pass 1 — installs Docker + /opt dirs and normally exits 0.
+#   Pass 2 — only when Docker was installed but its daemon did not start:
+#             the harness starts it via systemd and reruns the installer.
 #
 # Usage:
 #   ./scripts/e2e/run.sh
@@ -154,7 +147,7 @@ dump_diagnostics() {
     local svc
     for svc in "$@"; do
       log "--- compose logs: $svc (last 50 lines) ---"
-      docker exec "$CID" docker compose \
+      docker exec -u testuser "$CID" sudo -n docker compose \
         -f /home/testuser/.config/alice-guardian/docker-compose.yml \
         --env-file /home/testuser/.config/alice-guardian/.env \
         logs --no-color --tail=50 "$svc" 2>&1 | tail -60 || true
@@ -174,7 +167,7 @@ log "pass 1 exit code: $PASS1_EXIT"
 
 # ---------------------------------------------------------------------------
 # Handle exit 1 from pass 1: Docker was installed but daemon not yet running.
-# Start it via systemd, then run passes 2 and 3.
+# Start it via systemd, then rerun the installer.
 # ---------------------------------------------------------------------------
 if [ "$PASS1_EXIT" -eq 1 ]; then
   # Verify Docker binary is now present — if not, it's a different error.
@@ -201,71 +194,16 @@ if [ "$PASS1_EXIT" -eq 1 ]; then
     fail "Docker daemon did not become ready after systemctl start docker"
   fi
 
-  # Pass 2: daemon running, user not yet in docker group → expect exit 75.
-  log "=== pass 2: expecting usermod + exit 75 (ErrReloginRequired) ==="
+  log "=== pass 2: daemon started, expecting successful non-root rerun ==="
   PASS2_EXIT=0
   docker exec -u testuser "$CID" \
     /home/testuser/alice-installer "${INSTALLER_FLAGS[@]}" \
     || PASS2_EXIT=$?
   log "pass 2 exit code: $PASS2_EXIT"
 
-  if [ "$PASS2_EXIT" -eq 75 ]; then
-    # Pass 3: fresh exec picks up new group set.
-    log "=== pass 3: fresh exec with updated group set ==="
-    PASS3_EXIT=0
-    docker exec -u testuser "$CID" \
-      /home/testuser/alice-installer "${INSTALLER_FLAGS[@]}" \
-      || PASS3_EXIT=$?
-    log "pass 3 exit code: $PASS3_EXIT"
-    if [ "$PASS3_EXIT" -ne 0 ]; then
-      dump_diagnostics
-      fail "pass 3 (post-relogin) exited $PASS3_EXIT"
-    fi
-
-    # Pass 4: same-shell auto-reexec via sg.
-    # A bash -lc login shell inherits the pre-group-add PAM environment, so it
-    # exercises the stale-group detection and sg re-exec path.
-    log "=== pass 4: same-shell auto-reexec via sg ==="
-    PASS4_EXIT=0
-    docker exec -u testuser "$CID" bash -lc \
-      "/home/testuser/alice-installer ${INSTALLER_FLAGS[*]}" \
-      || PASS4_EXIT=$?
-    log "pass 4 exit code: $PASS4_EXIT"
-    if [ "$PASS4_EXIT" -ne 0 ]; then
-      dump_diagnostics
-      fail "pass 4 (same-shell sg reexec) exited $PASS4_EXIT"
-    fi
-  elif [ "$PASS2_EXIT" -eq 0 ]; then
-    log "pass 2 succeeded without usermod step (user already in group?)"
-  else
-    dump_diagnostics
-    fail "pass 2 exited $PASS2_EXIT (expected 0 or 75)"
-  fi
-
-elif [ "$PASS1_EXIT" -eq 75 ]; then
-  # Pass 1 exited 75: Docker already installed and running, user added to
-  # group.  A fresh exec picks up the new group set.
-  log "=== pass 2 (relogin after pass-1 usermod): expecting exit 0 ==="
-  PASS2_EXIT=0
-  docker exec -u testuser "$CID" \
-    /home/testuser/alice-installer "${INSTALLER_FLAGS[@]}" \
-    || PASS2_EXIT=$?
-  log "pass 2 exit code: $PASS2_EXIT"
   if [ "$PASS2_EXIT" -ne 0 ]; then
     dump_diagnostics
     fail "pass 2 exited $PASS2_EXIT"
-  fi
-
-  # Pass 4 (in this branch pass 3 is skipped): same-shell auto-reexec via sg.
-  log "=== pass 4: same-shell auto-reexec via sg ==="
-  PASS4_EXIT=0
-  docker exec -u testuser "$CID" bash -lc \
-    "/home/testuser/alice-installer ${INSTALLER_FLAGS[*]}" \
-    || PASS4_EXIT=$?
-  log "pass 4 exit code: $PASS4_EXIT"
-  if [ "$PASS4_EXIT" -ne 0 ]; then
-    dump_diagnostics
-    fail "pass 4 (same-shell sg reexec) exited $PASS4_EXIT"
   fi
 
 elif [ "$PASS1_EXIT" -ne 0 ]; then
@@ -306,8 +244,23 @@ assert "docker CLI is installed" \
 assert "docker compose plugin is installed" \
   docker exec "$CID" docker compose version --short
 
-assert "testuser is in docker group" \
-  docker exec "$CID" bash -c 'id testuser | grep -q docker'
+assert "installer runs as non-root testuser" \
+  docker exec -u testuser "$CID" bash -c 'test "$(id -u)" -ne 0'
+
+assert "testuser is not in docker group" \
+  docker exec "$CID" bash -c '! id -nG testuser | tr " " "\n" | grep -qx docker'
+
+assert "plain Docker access is denied to testuser" \
+  docker exec -u testuser "$CID" bash -c '! docker info'
+
+assert "sudo -n Docker access works for testuser" \
+  docker exec -u testuser "$CID" sudo -n docker info
+
+assert "sudo -n Compose production operation works for testuser" \
+  docker exec -u testuser "$CID" sudo -n docker compose \
+    -f /home/testuser/.config/alice-guardian/docker-compose.yml \
+    --env-file /home/testuser/.config/alice-guardian/.env \
+    config --quiet
 
 # ---------------------------------------------------------------------------
 # 9. Optional full deploy pass (FULL_DEPLOY=1)
@@ -352,11 +305,11 @@ if [ "${FULL_DEPLOY:-0}" = "1" ]; then
   fi
   rm -f "$INSTALLER_LOG"
   log "container list after deploy:"
-  docker exec "$CID" docker ps --format '{{.Names}}: {{.Status}}'
+  docker exec -u testuser "$CID" sudo -n docker ps --format '{{.Names}}: {{.Status}}'
   assert "redis is running" \
-    docker exec "$CID" bash -c "docker ps --format '{{.Names}}' | grep -q redis"
+    docker exec -u testuser "$CID" bash -c "sudo -n docker ps --format '{{.Names}}' | grep -q redis"
   assert "postgres is running" \
-    docker exec "$CID" bash -c "docker ps --format '{{.Names}}' | grep -q postgres"
+    docker exec -u testuser "$CID" bash -c "sudo -n docker ps --format '{{.Names}}' | grep -q postgres"
 fi
 
 # ---------------------------------------------------------------------------
